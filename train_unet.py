@@ -1,24 +1,21 @@
 """
-SIH26143 - Slick Detection: Baseline U-Net Training
+SIH26143 - Slick Detection: Baseline U-Net Training (v2 - binary)
 Owner: VISSHAL
 Task: Train baseline U-Net slick segmentation model
 
-IMPORTANT for the 3-day timeline: this uses a PRETRAINED encoder (ResNet34 on
-ImageNet) via segmentation_models_pytorch, not a from-scratch U-Net. Training
-a segmentation model from random weights in a few hours on a small dataset
-will not converge to anything usable. Transfer learning gets you a working
-model in ~30-60 min of GPU time instead of a full day+.
+Updated 2026-08-24 to match the actual dataset (Kaggle SOS, binary masks)
+instead of the originally-planned 5-class MKLab scheme.
+
+Still uses a PRETRAINED encoder (ResNet34 on ImageNet) via
+segmentation_models_pytorch, not a from-scratch U-Net -- same reasoning as
+before, training from scratch won't converge in a 3-day window.
 
 Install first:
     pip install segmentation-models-pytorch torch torchvision --break-system-packages
 
-Class imbalance warning: "Oil Spill" pixels will be a small minority of the
-image (most of a SAR frame is just open sea). Plain pixel-accuracy will look
-great even if the model just predicts "background" everywhere. That's why
-this script:
-  - uses a class-weighted loss (weight oil_spill higher)
-  - reports per-class IoU, not just accuracy
-  - reports Oil Spill IoU specifically as the number that actually matters
+Class imbalance still applies: oil pixels are a minority of any frame.
+Weighted loss + reporting Oil Spill IoU specifically (not just accuracy)
+still stands, just with 2 classes instead of 5 now.
 """
 
 import numpy as np
@@ -28,23 +25,28 @@ from torch.utils.data import Dataset, DataLoader
 import segmentation_models_pytorch as smp
 
 # ---- CONFIG ----------------------------------------------------------------
-DATA_DIR = "../data/processed"
-NUM_CLASSES = 5
-CLASS_NAMES = ["background", "oil_spill", "look_alike", "ship", "land"]
+DATA_DIR = "data/processed"
+NUM_CLASSES = 2
+CLASS_NAMES = ["background", "oil_spill"]
 BATCH_SIZE = 8
-EPOCHS = 15          # transfer learning converges fast; raise if you have time left
+EPOCHS = 15
 LR = 1e-4
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
-# Loss weights: push the model to care about oil_spill and look_alike (the
-# classes that matter for this problem) more than background/land/ship.
-CLASS_WEIGHTS = torch.tensor([0.3, 3.0, 2.0, 1.0, 0.5])
+# Recalibrated 2026-08-24 against VISSHAL's actual preprocess.py output:
+# oil_spill = 24.89% of pixels (NOT the ~2-3% we originally assumed -- this
+# "refined" dataset is patch-cropped to be oil-enriched, not raw full scenes).
+# Inverse-frequency weights normalized to mean 1: bg=0.75->0.50, oil=0.25->1.50.
+# The old [0.4, 3.5] weighting was tuned for a much rarer minority class and
+# would have pushed the model to over-predict oil -- bad news given we already
+# lost the look-alike class as a false-positive check.
+CLASS_WEIGHTS = torch.tensor([0.5, 1.5])
 
 
 class SlickDataset(Dataset):
     def __init__(self, split: str):
         self.images = np.load(f"{DATA_DIR}/{split}_images.npy")  # (N, H, W, 3) uint8
-        self.masks = np.load(f"{DATA_DIR}/{split}_masks.npy")    # (N, H, W) uint8
+        self.masks = np.load(f"{DATA_DIR}/{split}_masks.npy")    # (N, H, W) uint8, values 0/1
 
     def __len__(self):
         return len(self.images)
@@ -57,7 +59,6 @@ class SlickDataset(Dataset):
 
 
 def compute_iou(pred, target, num_classes):
-    """Per-class IoU for one batch. Returns array of length num_classes (NaN where class absent)."""
     ious = []
     pred = pred.view(-1)
     target = target.view(-1)
@@ -79,8 +80,7 @@ def evaluate(model, loader):
             logits = model(imgs)
             preds = torch.argmax(logits, dim=1)
             all_ious.append(compute_iou(preds, masks, NUM_CLASSES))
-    mean_ious = np.nanmean(np.array(all_ious), axis=0)
-    return mean_ious
+    return np.nanmean(np.array(all_ious), axis=0)
 
 
 def main():
@@ -91,8 +91,6 @@ def main():
 
     print(f"Train: {len(train_ds)} images | Val: {len(val_ds)} images | Device: {DEVICE}")
 
-    # Pretrained ResNet34 encoder, U-Net decoder. This is the transfer-learning
-    # move that makes this feasible in a 3-day sprint.
     model = smp.Unet(
         encoder_name="resnet34",
         encoder_weights="imagenet",
@@ -104,6 +102,7 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 
     best_oil_iou = -1.0
+    ious = [float("nan")] * NUM_CLASSES
     for epoch in range(1, EPOCHS + 1):
         model.train()
         total_loss = 0.0
@@ -118,23 +117,25 @@ def main():
 
         avg_loss = total_loss / len(train_ds)
         ious = evaluate(model, val_loader)
-        oil_iou = ious[1]  # index 1 = oil_spill
+        oil_iou = ious[1]
 
         print(f"Epoch {epoch:2d}/{EPOCHS} | loss {avg_loss:.4f} | "
               f"mean IoU {np.nanmean(ious):.3f} | OIL SPILL IoU {oil_iou:.3f}")
 
         if oil_iou > best_oil_iou:
             best_oil_iou = oil_iou
-            torch.save(model.state_dict(), "../data/processed/best_unet.pt")
+            torch.save(model.state_dict(), "data/processed/best_unet.pt")
             print(f"  -> new best oil-spill IoU ({oil_iou:.3f}), checkpoint saved")
 
     print("\nFinal per-class IoU:")
     for name, iou in zip(CLASS_NAMES, ious):
         print(f"  {name:12s}: {iou:.3f}")
     print(f"\nBest Oil Spill IoU achieved: {best_oil_iou:.3f}")
-    print("Checkpoint: ../data/processed/best_unet.pt")
+    print("Checkpoint: data/processed/best_unet.pt")
     print("\nNext step -> pass this checkpoint's predicted mask into the "
-          "linear-vs-blob shape classifier (your Aug 24 task).")
+          "linear-vs-blob shape classifier (your Aug 24 task). Since this "
+          "dataset has no look-alike label, the shape classifier now carries "
+          "more weight for cutting false positives than originally planned.")
 
 
 if __name__ == "__main__":

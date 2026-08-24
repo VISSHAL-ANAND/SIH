@@ -1,36 +1,34 @@
 """
-SIH26143 - Slick Detection: Dataset Preprocessing
+SIH26143 - Slick Detection: Dataset Preprocessing (v2)
 Owner: VISSHAL
-Task: Collect & preprocess Sentinel-1 SAR oil-spill dataset
+Task: Collect & preprocess SAR oil-spill dataset
 
-Dataset: MKLab Oil Spill Detection Dataset (Zenodo, DOI 10.5281/zenodo.6552722)
-  https://zenodo.org/records/6552722
+DATASET (updated 2026-08-24): Zenodo kept 502/504'ing, so we pivoted to the
+Kaggle mirror: bakhtiyar2222/deep-sar-oil-spill-segmentation-refined
+(the "SOS" dataset, built on Zhu et al. 2021).
 
-Download manually first (Zenodo doesn't like scripted bulk downloads without an
-API token, and the file is a few GB), then point RAW_DIR below at the extracted
-folder. Expected structure after extraction:
+This is a DIFFERENT structure/label scheme than the original 5-class MKLab
+plan -- confirmed from VISSHAL's actual download:
 
-    raw/
-      train/
-        images/   *.jpg  (SAR images)
-        labels/   *.png  (color-coded segmentation masks)
-      test/
-        images/
-        labels/
+    archive/
+      images/[images/]train/*.jpg   (or .png)
+      images/[images/]val/*.jpg
+      masks/masks/train/*.png
+      masks/masks/val/*.png
 
-Mask color code (from the dataset's own class definitions):
-    Black   (0,0,0)     -> Background / Sea Surface
-    Cyan    (0,255,255) -> Oil Spill        <-- the class you actually care about
-    Red     (255,0,0)   -> Look-alike       <-- the class that causes false positives
-    Brown   (153,76,0)  -> Ship
-    Green   (0,153,0)   -> Land
+  - Only train/val exist (no separate held-out test folder in this dataset).
+    We carve a small test slice out of train ourselves so we still have a
+    truly held-out set for final eval.
+  - Masks are BINARY: white = oil spill, black = everything else (sea,
+    look-alike, land, ship all lumped as "not oil"). We lose the
+    look-alike-as-its-own-class signal the original 5-class plan had --
+    see the NOTE printed at the end of main() for how we compensate for
+    that later in the pipeline instead.
 
-This script:
-  1. Resizes all images/masks to a fixed size (default 256x256 - fast enough
-     for a 3-day sprint, bump to 512 later if you have time).
-  2. Converts the RGB masks into a single-channel class-index mask.
-  3. Splits into train/val (the dataset's own test/ folder becomes your held-out test set).
-  4. Saves everything as .npy arrays so training doesn't re-decode images every epoch.
+The script auto-detects whether "images/" has an extra nested "images/"
+folder inside it (Kaggle zips are inconsistent about this) so you shouldn't
+need to hand-edit paths even if your folder layout differs slightly from
+someone else's download of the same dataset.
 """
 
 import os
@@ -39,48 +37,60 @@ import numpy as np
 from PIL import Image
 
 # ---- CONFIG ----------------------------------------------------------------
-RAW_DIR = "../data/raw"              # point this at your extracted Zenodo download
-OUT_DIR = "../data/processed"
+RAW_DIR = "archive"   # point this at the extracted Kaggle "archive" folder
+OUT_DIR = "data/processed"
 IMG_SIZE = 256
-VAL_SPLIT = 0.15
+TEST_SPLIT_FROM_TRAIN = 0.10   # carve a held-out test set since the dataset has none
 SEED = 42
 
-CLASS_COLORS = {
-    (0, 0, 0): 0,        # Background / Sea Surface
-    (0, 255, 255): 1,    # Oil Spill  <- primary target class
-    (255, 0, 0): 2,      # Look-alike
-    (153, 76, 0): 3,     # Ship
-    (0, 153, 0): 4,      # Land
-}
-NUM_CLASSES = len(CLASS_COLORS)
-CLASS_NAMES = ["background", "oil_spill", "look_alike", "ship", "land"]
+CLASS_NAMES = ["background", "oil_spill"]  # binary: 0 = not oil, 1 = oil
+NUM_CLASSES = 2
 
 
-def rgb_mask_to_class_index(mask_rgb: np.ndarray) -> np.ndarray:
-    """Convert an (H, W, 3) color mask into an (H, W) class-index mask."""
-    h, w, _ = mask_rgb.shape
-    class_mask = np.zeros((h, w), dtype=np.uint8)
-    for color, idx in CLASS_COLORS.items():
-        matches = np.all(mask_rgb == np.array(color), axis=-1)
-        class_mask[matches] = idx
-    return class_mask
-
-
-def load_split(split_dir: str):
-    img_paths = sorted(glob.glob(os.path.join(split_dir, "images", "*")))
-    lbl_paths = sorted(glob.glob(os.path.join(split_dir, "labels", "*")))
-    assert len(img_paths) == len(lbl_paths), (
-        f"Mismatch: {len(img_paths)} images vs {len(lbl_paths)} labels in {split_dir}. "
-        "Check filenames line up between images/ and labels/."
+def _find_split_dir(base: str, split: str) -> str:
+    """Handle the images/images/train vs images/train inconsistency."""
+    nested = os.path.join(base, os.path.basename(base), split)
+    direct = os.path.join(base, split)
+    if os.path.isdir(nested):
+        return nested
+    if os.path.isdir(direct):
+        return direct
+    raise FileNotFoundError(
+        f"Couldn't find a '{split}' folder under {base} (checked {nested} and {direct}). "
+        "Open the folder yourself and check the actual nesting, then edit _find_split_dir "
+        "or just hardcode the path here."
     )
 
+
+def load_split(images_base: str, masks_base: str, split: str):
+    img_dir = _find_split_dir(images_base, split)
+    mask_dir = _find_split_dir(masks_base, split)
+
+    img_paths = {os.path.splitext(os.path.basename(p))[0]: p
+                 for p in glob.glob(os.path.join(img_dir, "*"))}
+    mask_paths = {os.path.splitext(os.path.basename(p))[0]: p
+                  for p in glob.glob(os.path.join(mask_dir, "*"))}
+
+    common_keys = sorted(set(img_paths) & set(mask_paths))
+    missing_images = set(mask_paths) - set(img_paths)
+    missing_masks = set(img_paths) - set(mask_paths)
+    if missing_images or missing_masks:
+        print(f"  [warning] {len(missing_images)} masks with no matching image, "
+              f"{len(missing_masks)} images with no matching mask -- skipping those.")
+    if not common_keys:
+        raise RuntimeError(
+            f"No matching image/mask filename pairs found in {img_dir} and {mask_dir}. "
+            "Check that filenames correspond 1:1 between the two folders (extension can differ)."
+        )
+
     images, masks = [], []
-    for img_p, lbl_p in zip(img_paths, lbl_paths):
-        img = Image.open(img_p).convert("RGB").resize((IMG_SIZE, IMG_SIZE), Image.BILINEAR)
-        lbl = Image.open(lbl_p).convert("RGB").resize((IMG_SIZE, IMG_SIZE), Image.NEAREST)
+    for key in common_keys:
+        img = Image.open(img_paths[key]).convert("RGB").resize((IMG_SIZE, IMG_SIZE), Image.BILINEAR)
+        lbl = Image.open(mask_paths[key]).convert("L").resize((IMG_SIZE, IMG_SIZE), Image.NEAREST)
 
         img_arr = np.array(img, dtype=np.uint8)
-        lbl_arr = rgb_mask_to_class_index(np.array(lbl, dtype=np.uint8))
+        # binarize: anything above mid-gray counts as oil_spill (1), else background (0)
+        lbl_arr = (np.array(lbl, dtype=np.uint8) > 127).astype(np.uint8)
 
         images.append(img_arr)
         masks.append(lbl_arr)
@@ -92,31 +102,44 @@ def main():
     os.makedirs(OUT_DIR, exist_ok=True)
     rng = np.random.default_rng(SEED)
 
+    images_base = os.path.join(RAW_DIR, "images")
+    masks_base = os.path.join(RAW_DIR, "masks")
+
     print("Loading train split...")
-    train_imgs, train_masks = load_split(os.path.join(RAW_DIR, "train"))
+    train_imgs, train_masks = load_split(images_base, masks_base, "train")
 
-    print("Loading test split (held out, do not touch until final eval)...")
-    test_imgs, test_masks = load_split(os.path.join(RAW_DIR, "test"))
+    print("Loading val split...")
+    val_imgs, val_masks = load_split(images_base, masks_base, "val")
 
-    # carve a val set out of train
+    # carve a held-out test slice out of train (dataset ships without one)
     n = len(train_imgs)
     idx = rng.permutation(n)
-    n_val = int(n * VAL_SPLIT)
-    val_idx, tr_idx = idx[:n_val], idx[n_val:]
+    n_test = int(n * TEST_SPLIT_FROM_TRAIN)
+    test_idx, tr_idx = idx[:n_test], idx[n_test:]
 
     np.save(os.path.join(OUT_DIR, "train_images.npy"), train_imgs[tr_idx])
     np.save(os.path.join(OUT_DIR, "train_masks.npy"), train_masks[tr_idx])
-    np.save(os.path.join(OUT_DIR, "val_images.npy"), train_imgs[val_idx])
-    np.save(os.path.join(OUT_DIR, "val_masks.npy"), train_masks[val_idx])
-    np.save(os.path.join(OUT_DIR, "test_images.npy"), test_imgs)
-    np.save(os.path.join(OUT_DIR, "test_masks.npy"), test_masks)
+    np.save(os.path.join(OUT_DIR, "val_images.npy"), val_imgs)
+    np.save(os.path.join(OUT_DIR, "val_masks.npy"), val_masks)
+    np.save(os.path.join(OUT_DIR, "test_images.npy"), train_imgs[test_idx])
+    np.save(os.path.join(OUT_DIR, "test_masks.npy"), train_masks[test_idx])
 
-    print(f"Train: {len(tr_idx)} | Val: {len(val_idx)} | Test: {len(test_imgs)}")
-    print("Class pixel counts (train) — check for severe imbalance:")
-    unique, counts = np.unique(train_masks[tr_idx], return_counts=True)
-    for u, c in zip(unique, counts):
-        print(f"  {CLASS_NAMES[u]:12s}: {c:,}")
-    print(f"\nSaved processed arrays to {OUT_DIR}/")
+    print(f"Train: {len(tr_idx)} | Val: {len(val_imgs)} | Test (held out from train): {len(test_idx)}")
+
+    total_pixels = train_masks[tr_idx].size
+    oil_pixels = int(train_masks[tr_idx].sum())
+    print(f"\nOil spill pixels: {oil_pixels:,} / {total_pixels:,} "
+          f"({100 * oil_pixels / total_pixels:.2f}% of all train pixels)")
+    print(f"Saved processed arrays to {OUT_DIR}/")
+
+    print("\nNOTE: this dataset has no separate 'look-alike' class (unlike the "
+          "original MKLab plan) -- everything non-oil is lumped together, "
+          "which means the model can't be directly taught to distinguish real "
+          "spills from look-alikes at THIS stage. That distinction now needs "
+          "to happen downstream instead -- e.g. in the linear-vs-blob shape "
+          "classifier (tomorrow's task) or by cross-referencing with hull "
+          "detection/AIS matching. Flag this to the team so it's a conscious "
+          "design choice, not a silently dropped feature.")
 
 
 if __name__ == "__main__":
