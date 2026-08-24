@@ -1,4 +1,4 @@
-# Slick Detection — VISSHAL's Track (SIH26143)
+# Slick Detection — Track (SIH26143)
 
 Hey — this is your corner of the oil-spill project: finding the actual slick
 in a SAR image before anyone can figure out who caused it. Everything below
