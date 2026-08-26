@@ -1,10 +1,18 @@
 data/raw/
 data/processed/
 archive/
+raw/
+sar_ships/
+runs/
+weights/
+
+# Model checkpoints - large binary files, don't belong in git
 *.pt
 *.pth
 *.h5
 *.ckpt
+test_synthetic_*.tif
+
 __pycache__/
 *.pyc
 .venv/
