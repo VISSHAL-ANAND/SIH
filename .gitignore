@@ -1,19 +1,13 @@
-# Dataset - too large for git, everyone downloads it themselves
 data/raw/
 data/processed/
-
-# Model checkpoints - large binary files, don't belong in git
+archive/
 *.pt
 *.pth
 *.h5
 *.ckpt
-
-# Python
 __pycache__/
 *.pyc
 .venv/
 venv/
-
-# OS junk
 .DS_Store
 Thumbs.db
