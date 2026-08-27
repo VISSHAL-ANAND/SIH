@@ -6,6 +6,16 @@ sar_ships/
 runs/
 weights/
 
+
+# Local AIS datasets - DO NOT COMMIT
+AIS_CSV_PATH/
+
+# Python virtual environments
+.venv/
+.venv-1/
+.venv-2/
+
+
 # Model checkpoints - large binary files, don't belong in git
 *.pt
 *.pth
