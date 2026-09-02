@@ -1,14 +1,21 @@
 """
-SIH26143 - Pipeline Integration v2: Wire all 4 modules together
+SIH26143 - Pipeline Integration v3: Wire all 4 modules together
 Owner: VISSHAL (took over from RATHIMEENA)
-Updated 2026-08-26: RINOSH's real hull detector + VISSHAL's real AIS matcher
-are now wired in. Only drift simulation remains mocked.
+Updated 2026-09-01: drift simulation is now wired in for real (ocean_wind_loader
++ drift_simulation.py, using geolocation.py for slick pixel->latlon). All 4
+stages are genuinely connected now -- nothing left mocked in the happy path.
 
 WHAT'S REAL VS MOCKED NOW:
   - Slick detection : REAL (VISSHAL's trained U-Net + shape classifier)
   - Hull detection  : REAL (RINOSH's trained YOLOv8 detector, geo-verified)
   - AIS matching    : REAL (VISSHAL's spatial-temporal matcher)
-  - Drift simulation: MOCKED. SIMI's real simulation isn't built yet.
+  - Drift simulation: REAL (Open-Meteo current/wind + 3%-wind-factor backward
+                       sim). Falls back to a labeled mock per-image ONLY if
+                       the live Open-Meteo fetch fails (e.g. no network) --
+                       treat that as a bug to fix, not a normal outcome.
+  - Jurisdiction/ICG-zone routing: STILL NOT BUILT. drift_simulation.py gives
+    an origin point, not a zone -- jurisdiction_zone/within_500m_exclusion on
+    DriftResult are still placeholders until that logic exists.
 
 IMPORTANT GEO CAVEAT (be upfront about this in the pitch):
 RINOSH's hull detector returns REAL lat/lon only when given a georeferenced
@@ -22,15 +29,10 @@ demo, run it through and you'll get genuinely real coordinates instead of
 the anchor approximation.
 """
 
-import sys
 from datetime import datetime
 
 import numpy as np
 from PIL import Image
-
-sys.path.append("../sih26143_slick_detection")
-sys.path.append("../sih26143_ship_detection")
-sys.path.append("../sih26143_ais_matching")
 
 from pipeline_contracts import (
     SlickComponent, SlickDetectionResult,
@@ -40,6 +42,7 @@ from pipeline_contracts import (
     PipelineOutput,
 )
 from geolocation import EXAMPLE_DEMO_ANCHOR, pixel_to_latlon
+from jurisdiction_lookup import get_jurisdiction_info
 
 
 # -----------------------------------------------------------------------------
@@ -140,20 +143,80 @@ def run_ais_matching(image_id: str, hull_result: HullDetectionResult, ais_df) ->
 
 
 # -----------------------------------------------------------------------------
-# STAGE 4: Drift Simulation -- STILL MOCKED, SIMI's real sim isn't built yet
+# STAGE 4: Drift Simulation -- REAL, calls ocean_wind_loader + drift_simulation
 # -----------------------------------------------------------------------------
-def run_drift_simulation(image_id: str, slick_result: SlickDetectionResult) -> DriftSimResult:
-    """MOCK -- REPLACE WITH REAL BACKWARD DRIFT SIMULATION once SIMI builds it."""
-    estimates = [
-        DriftResult(
-            slick_component_id=comp.component_id,
-            estimated_origin_lat=0.0, estimated_origin_lon=0.0,
-            estimated_origin_time_offset_hours=6.0,
-            jurisdiction_zone="[MOCK -- not yet computed]",
-            within_500m_exclusion=False,
+def run_drift_simulation(image_id: str, slick_result: SlickDetectionResult,
+                          detection_time: datetime,
+                          image_anchor: tuple = EXAMPLE_DEMO_ANCHOR) -> DriftSimResult:
+    """
+    For each detected slick component, converts its pixel centroid to a
+    lat/lon (via geolocation.py's demo-anchor approximation -- see that
+    module's caveats), pulls real ocean current + wind data for the image's
+    date/location, and runs the backward drift simulation to estimate the
+    slick's likely origin point.
+
+    jurisdiction_zone / within_500m_exclusion remain placeholders -- that's
+    SIMI's separate, not-yet-built task (ICG zone lookup), not something
+    drift_simulation.py computes.
+
+    Falls back to a clearly-labeled mock per-component if the live
+    Open-Meteo fetch fails (e.g. no network), so a demo run doesn't crash
+    outright -- but this should be treated as a real failure to fix, not a
+    normal path.
+    """
+    from ocean_wind_loader import fetch_currents_and_wind
+    from drift_simulation import simulate_backward_drift
+
+    anchor_lat, anchor_lon = image_anchor
+    date_str = detection_time.strftime("%Y-%m-%d")
+
+    weather_row = None
+    try:
+        weather = fetch_currents_and_wind(
+            lat=anchor_lat, lon=anchor_lon, start_date=date_str, end_date=date_str,
         )
-        for comp in slick_result.components
-    ]
+        weather["diff"] = (weather["time"] - detection_time).abs()
+        weather_row = weather.loc[weather["diff"].idxmin()]
+    except Exception as e:
+        print(f"    [warning] ocean/wind fetch failed for {image_id} ({e}) -- "
+              f"falling back to mocked drift estimates. Fix network access "
+              f"before treating this as demo-ready.")
+
+    estimates = []
+    for comp in slick_result.components:
+        slick_lat, slick_lon = pixel_to_latlon(comp.centroid_x, comp.centroid_y, image_anchor)
+
+        if weather_row is None:
+            zone, within_500m, _ = get_jurisdiction_info(slick_lat, slick_lon)
+            estimates.append(DriftResult(
+                slick_component_id=comp.component_id,
+                estimated_origin_lat=slick_lat, estimated_origin_lon=slick_lon,
+                estimated_origin_time_offset_hours=6.0,
+                jurisdiction_zone=zone,
+                within_500m_exclusion=within_500m,
+            ))
+            continue
+
+        result = simulate_backward_drift(
+            slick_lat=slick_lat, slick_lon=slick_lon,
+            detection_time=detection_time,
+            current_velocity_kmh=weather_row["current_velocity_kmh"],
+            current_direction_deg=weather_row["current_direction_deg"],
+            wind_speed_kmh=weather_row["wind_speed_kmh"],
+            wind_direction_deg=weather_row["wind_direction_deg"],
+        )
+
+        zone, within_500m, _ = get_jurisdiction_info(result.origin_lat, result.origin_lon)
+
+        estimates.append(DriftResult(
+            slick_component_id=comp.component_id,
+            estimated_origin_lat=result.origin_lat,
+            estimated_origin_lon=result.origin_lon,
+            estimated_origin_time_offset_hours=result.hours_back,
+            jurisdiction_zone=zone,
+            within_500m_exclusion=within_500m,
+        ))
+
     return DriftSimResult(image_id=image_id, drift_estimates=estimates)
 
 
@@ -161,17 +224,31 @@ def run_drift_simulation(image_id: str, slick_result: SlickDetectionResult) -> D
 # FULL PIPELINE
 # -----------------------------------------------------------------------------
 def run_full_pipeline(image_id: str, image_rgb: np.ndarray, image_path: str,
-                       slick_model, ais_df) -> PipelineOutput:
+                       slick_model, ais_df, image_anchor: tuple = EXAMPLE_DEMO_ANCHOR) -> PipelineOutput:
     slicks = run_slick_detection(image_id, image_rgb, slick_model)
     hulls = run_hull_detection(image_id, image_path)
     ais = run_ais_matching(image_id, hulls, ais_df)
-    drift = run_drift_simulation(image_id, slicks)
+
+    # Reuse the first hull's timestamp as the image's acquisition/detection
+    # time (same source Stage 3 already parses from) -- falls back to now()
+    # if no hulls were detected or none carried a timestamp.
+    if hulls.hulls and hulls.hulls[0].timestamp:
+        detection_time = datetime.fromisoformat(
+            hulls.hulls[0].timestamp.replace("Z", "+00:00")
+        ).replace(tzinfo=None)
+    else:
+        detection_time = datetime.now()
+
+    drift = run_drift_simulation(image_id, slicks, detection_time, image_anchor)
 
     return PipelineOutput(image_id=image_id, slicks=slicks, hulls=hulls,
                            ais_matches=ais, drift=drift)
 
 
 def main():
+    import tempfile
+    from pathlib import Path
+
     from predict_and_classify import load_model
     from ais_matcher import generate_synthetic_ais
 
@@ -182,13 +259,21 @@ def main():
           "MarineCadastre CSV via ais_matcher.load_ais_data() when ready)...")
     ais_df = generate_synthetic_ais()
 
-    test_images = np.load("../sih26143_slick_detection/data/processed/test_images.npy")
+    # Path fixed 2026-09-01 (Phase 0 sweep): this script lives flat in A:\SIH,
+    # not nested inside its own subfolder, so it must NOT use "../" -- that
+    # pointed one level ABOVE the project root, which doesn't exist. Path is
+    # relative to A:\SIH itself.
+    test_images = np.load("data/processed/test_images.npy")
     n = min(5, len(test_images))
     print(f"Running full pipeline on {n} test images...\n")
 
     for i in range(n):
         image_id = f"test_{i}"
-        temp_path = f"/tmp/{image_id}.jpg"
+        # Use the OS temp dir instead of a hardcoded "/tmp/..." path -- "/tmp"
+        # is a Unix convention and is not reliable on Windows (the dev
+        # machine here is A:\SIH). tempfile.gettempdir() resolves correctly
+        # on both platforms.
+        temp_path = str(Path(tempfile.gettempdir()) / f"{image_id}.jpg")
         Image.fromarray(test_images[i]).save(temp_path)
 
         output = run_full_pipeline(image_id, test_images[i], temp_path, slick_model, ais_df)

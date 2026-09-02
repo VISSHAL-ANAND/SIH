@@ -1,26 +1,3 @@
-"""
-SIH26143 - AIS Matching
-Built by VISSHAL
-Task: Spatial-temporal hull-vs-AIS matcher + no-match suspect flagging
-
-CORE IDEA:
-For each detected ship/hull, search AIS position reports within:
-    1. A distance tolerance
-    2. A time tolerance
-
-If an AIS match exists:
-    -> Vessel identified
-    -> Legitimate AIS presence
-
-If NO AIS match exists:
-    -> Flag as SUSPECT
-    -> Possible AIS-off / dark vessel / spoofing
-
-IMPORTANT:
-AIS data is observational evidence. A missing AIS broadcast does NOT by
-itself prove illegal activity.
-"""
-
 import numpy as np
 import pandas as pd
 
@@ -32,9 +9,21 @@ from datetime import datetime, timedelta
 # CONFIGURATION
 # =============================================================================
 
+from pathlib import Path
+
 # Your actual MarineCadastre AIS file.
 # IMPORTANT: your file does NOT have a .csv extension.
-AIS_CSV_PATH = r"A:\SIH\AIS_CSV_PATH\ais-2025-01-01"
+AIS_CSV_PATH = str(Path(__file__).parent / "AIS_CSV_PATH" / "ais-2025-01-01")
+
+# NOTE (2026-08-30): we tried swapping this for Global Fishing Watch's API
+# for genuine global coverage (MarineCadastre is US-only, doesn't cover our
+# Gujarat demo region). Got all the way through fixing the request format
+# and dataset ID, but hit a 403 "Insufficient permissions" on the AIS
+# Vessel Presence dataset -- this needs an elevated access request from GFW
+# (email apis@globalfishingwatch.org) that wasn't approved in time. Reverted
+# to MarineCadastre, which is real, proven, and validates the matcher logic
+# at scale -- just not geographically correct for this specific demo region.
+# Be upfront about that distinction in the pitch.
 
 # Maximum distance between detected hull and AIS position.
 DISTANCE_TOLERANCE_KM = 5.0

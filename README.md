@@ -162,3 +162,96 @@ python integration_pipeline.py
   verification.
 - A real georeferenced Sentinel-1 scene would upgrade the geo story from
   "disclosed approximation" to "genuinely real," if there's time to get one.
+
+# Drift Simulation — taken over from SIMI by VISSHAL
+
+## Install this first
+```bash
+pip install requests pandas
+```
+
+## What's done vs. what's left
+
+| File | Where it stands | Built |
+|---|---|---|
+| `ocean_wind_loader.py` | Ready — real data source, parsing verified | 2026-08-31 09:46 UTC |
+| `drift_simulation.py` | Ready — physics self-tests all pass | 2026-08-31 09:46 UTC |
+| Jurisdiction routing (ICG zones/500m exclusion) | NOT built — the "Done" status on Notion for this doesn't reflect real work | not yet |
+| Validation against a real spill case | NOT built | not yet |
+
+## Data source: Open-Meteo instead of raw HYCOM/GFS
+
+Raw HYCOM (currents) and GFS (wind) access means dealing with THREDDS/
+OPeNDAP servers or NOMADS GRIB files — real, but genuinely painful to
+integrate correctly under time pressure. **Open-Meteo** provides the same
+type of real data through a free, keyless JSON REST API, sourced from real
+models including NOAA GFS (wind) and Copernicus Marine/MeteoFrance SMOC
+(ocean currents). No API key needed, free for non-commercial use.
+
+**Be honest about this in the pitch:** "We use Open-Meteo's API layer over
+real NOAA/Copernicus models rather than raw HYCOM/GFS file access, for
+integration speed within the hackathon window. The underlying data is
+real; the access method is simplified."
+
+## The physical model: the "3% wind factor" rule
+
+This is a real, established approximation used in actual operational spill
+models — including NOAA's own GNOME tool, which the original task
+explicitly referenced. Surface drift velocity ≈ ocean current + (3% of
+wind speed, in wind direction). This is a genuine simplification (real
+Ekman transport physics is more complex), but the 3% factor itself is not
+invented for this project — it's a widely-cited real approximation.
+
+## How to run it
+
+```python
+from ocean_wind_loader import fetch_currents_and_wind
+from drift_simulation import simulate_backward_drift
+from datetime import datetime
+
+# 1. Get real current + wind data for your demo region/date
+data = fetch_currents_and_wind(
+    lat=20.85, lon=69.20,  # Gujarat demo anchor
+    start_date="2026-08-20", end_date="2026-08-20",
+)
+print(data)
+
+# 2. Pick the hour closest to your slick's detection time, then run the
+#    backward simulation
+row = data.iloc[12]  # e.g. noon
+result = simulate_backward_drift(
+    slick_lat=20.85, slick_lon=69.20,
+    detection_time=datetime(2026, 8, 20, 12, 0, 0),
+    current_velocity_kmh=row["current_velocity_kmh"],
+    current_direction_deg=row["current_direction_deg"],
+    wind_speed_kmh=row["wind_speed_kmh"],
+    wind_direction_deg=row["wind_direction_deg"],
+    hours_back=6.0,
+)
+print(f"Estimated origin: {result.origin_lat}, {result.origin_lon}")
+```
+
+## Verified through actual testing
+
+- `ocean_wind_loader.py`: parsing logic checked against Open-Meteo's own
+  documented example JSON response — passed.
+- `drift_simulation.py`: three physics self-tests — pure northward current
+  correctly places origin to the south, pure eastward current correctly
+  places origin to the west, wind has a real but appropriately small
+  (3%-scale) effect relative to current. All passed.
+
+## Honest limitations (say these in the pitch, don't hide them)
+- Assumes current/wind conditions were roughly constant during the
+  backward window — real conditions vary hour to hour. A more
+  sophisticated version would use the actual historical time series for
+  each backward step instead of one snapshot.
+- Doesn't model oil weathering (evaporation, emulsification) which
+  changes real drift behavior over time.
+- Still explicitly a "simplified" simulation, as the original task asked
+  for — not a claim of GNOME/OSERIT-grade accuracy, only similarity in
+  general approach.
+- I could not test the live network calls to Open-Meteo myself (not
+  reachable from my sandbox) — the parsing logic is verified against their
+  real documented example, but run it live on your machine to confirm.
+- Jurisdiction routing and real-spill validation (SIMI's other two tasks)
+  are NOT built yet — only the two most foundational pieces are done.

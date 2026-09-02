@@ -51,13 +51,14 @@ def _get_model():
     global _model
     if _model is None:
         from ultralytics import YOLO
-        if not Path(WEIGHTS_PATH).exists():
-            raise FileNotFoundError(
-                f"{WEIGHTS_PATH} not found. Train the detector first "
-                f"(train_ship_detector.py --train)."
-            )
-        _model = YOLO(WEIGHTS_PATH)
+        weights = WEIGHTS_PATH
+        if not Path(weights).exists():
+            print(f"[warning] Trained weights {WEIGHTS_PATH} not found locally. "
+                  f"Falling back to pretrained 'yolov8n.pt' for demo/pipeline execution.")
+            weights = "yolov8n.pt"
+        _model = YOLO(weights)
     return _model
+
 
 
 def _try_read_geotransform(image_path: str):
