@@ -136,8 +136,8 @@ data that doesn't have it.
 1. Make sure `sih26143_slick_detection`, `sih26143_ship_detection`, and
    `sih26143_ais_matching` folders are all siblings of this one (same
    parent directory) — the imports assume that layout.
-2. RINOSH's `best.pt` needs to exist at
-   `sih26143_ship_detection/runs/detect/sar_hull_detector/weights/best.pt`
+2. RINOSH's `best_unet.pt` needs to exist at
+   `sih26143_ship_detection/runs/detect/sar_hull_detector/weights/best_unet.pt`
 3. Real AIS data: point `ais_matcher.py`'s `AIS_CSV_PATH` at a real
    MarineCadastre download, or the pipeline defaults to synthetic AIS data
    for testing (fine for verifying wiring, NOT for the actual pitch).

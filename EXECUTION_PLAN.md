@@ -18,7 +18,7 @@ Go through every file below and confirm it's actually in the state described. Th
 ### `sih26143_ship_detection/` (RINOSH's)
 | File | Check |
 |---|---|
-| `ship_detection_module.py` | Confirm `runs/detect/sar_hull_detector/weights/best.pt` actually exists on whichever machine will run the demo. This is RINOSH's trained model — if it's only on his laptop, that's a real risk for demo day. |
+| `ship_detection_module.py` | Confirm `runs/detect/sar_hull_detector/weights/best_unet.pt` actually exists on whichever machine will run the demo. This is RINOSH's trained model — if it's only on his laptop, that's a real risk for demo day. |
 | `test_geo_conversion.py` | Re-run it. Should still print "All geo-conversion tests passed." |
 | `evaluate_by_size.py` | Run it once if you haven't seen the actual small/medium/large recall numbers yet — you'll want these for the pitch ("we found X, so we tuned Y"). |
 

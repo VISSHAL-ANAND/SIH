@@ -40,7 +40,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-WEIGHTS_PATH = "runs/detect/sar_hull_detector/weights/best.pt"
+WEIGHTS_PATH = "runs/detect/sar_hull_detector/weights/best_unet.pt"
 CONF_THRESHOLD = 0.25
 IOU_THRESHOLD = 0.45
 

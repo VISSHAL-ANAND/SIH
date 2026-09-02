@@ -64,7 +64,7 @@ All four stages are wired together in `sih26143_integration/integration_pipeline
 ### `sih26143_ship_detection/` — REAL (RINOSH's)
 | File | What it does | Notes |
 |---|---|---|
-| `ship_detection_module.py` | YOLOv8 hull detector | Trained weights at `runs/detect/sar_hull_detector/weights/best.pt` — **risk: may only exist on RINOSH's laptop, not the demo machine** |
+| `ship_detection_module.py` | YOLOv8 hull detector | Trained weights at `runs/detect/sar_hull_detector/weights/best_unet.pt` — **risk: may only exist on RINOSH's laptop, not the demo machine** |
 | `test_geo_conversion.py` | Self-test for pixel→geo conversion | Should print "All geo-conversion tests passed." |
 | `evaluate_by_size.py` | Recall by object size | Run once for pitch numbers ("we found X, so we tuned Y") |
 

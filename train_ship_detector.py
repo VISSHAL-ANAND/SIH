@@ -61,13 +61,13 @@ def train():
         # P2-enabled config (yolov8-p2.yaml) for a dedicated small-object head
     )
 
-    print(f"\nTraining complete. Best weights: runs/detect/{RUN_NAME}/weights/best.pt")
+    print(f"\nTraining complete. Best weights: runs/detect/{RUN_NAME}/weights/best_unet.pt")
     print("Copy that to data/processed/ (or wherever your pipeline module expects it).")
 
 
 def validate():
     from ultralytics import YOLO
-    weights = f"runs/detect/{RUN_NAME}/weights/best.pt"
+    weights = f"runs/detect/{RUN_NAME}/weights/best_unet.pt"
     if not Path(weights).exists():
         raise SystemExit(f"{weights} not found — run --train first.")
     model = YOLO(weights)
@@ -84,7 +84,7 @@ def predict(image_path: str):
     using the SAR scene's geotransform/metadata, and attaches a timestamp.
     """
     from ultralytics import YOLO
-    weights = f"runs/detect/{RUN_NAME}/weights/best.pt"
+    weights = f"runs/detect/{RUN_NAME}/weights/best_unet.pt"
     if not Path(weights).exists():
         raise SystemExit(f"{weights} not found — run --train first.")
     model = YOLO(weights)

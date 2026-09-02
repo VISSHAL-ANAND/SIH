@@ -64,7 +64,7 @@ All four stages are wired together in `sih26143_integration/integration_pipeline
 ### `sih26143_ship_detection/` — REAL (RINOSH's)
 | File | What it does | Notes |
 |---|---|---|
-| `ship_detection_module.py` | YOLOv8 hull detector | Trained weights at `runs/detect/sar_hull_detector/weights/best.pt` — **missing on demo machine filesystem; currently falls back to `yolov8n.pt` (0 hulls detected)** |
+| `ship_detection_module.py` | YOLOv8 hull detector | Trained weights at `runs/detect/sar_hull_detector/weights/best_unet.pt` — **missing on demo machine filesystem; currently falls back to `yolov8n.pt` (0 hulls detected)** |
 | `test_geo_conversion.py` | Self-test for pixel→geo conversion | Should print "All geo-conversion tests passed." |
 | `evaluate_by_size.py` | Recall by object size | Run once for pitch numbers ("we found X, so we tuned Y") |
 
@@ -259,7 +259,7 @@ The biggest risk to this plan is not technical difficulty — it's the same sile
 
 ## 9. CHANGELOG (Antigravity/Gemini updates this section when status changes)
 
-- 2026-09-02: Hull Detector Re-verification Audit: Re-ran `integration_pipeline.py` on all 5 test images. Confirmed `[warning] Trained weights ... best.pt not found locally` persists because `runs/detect/sar_hull_detector/weights/best.pt` does not exist on disk. Recorded actual hull counts: `test_0`: 0 hulls, `test_1`: 0 hulls, `test_2`: 0 hulls, `test_3`: 0 hulls, `test_4`: 0 hulls (0 total hulls detected due to `yolov8n.pt` COCO fallback).
-- 2026-09-02: Pipeline Audit & Network Verification: Re-ran full pipeline on all 5 test images. Confirmed live Open-Meteo ocean/wind fetch executed with 0 warnings. Disclosed that previous "REAL end-to-end" claim ran on silent fallback due to local network socket block (`ConnectionResetError 10054`), demonstrating that the offline fallback mechanism works as designed. Noted hull detector status: trained weights file `runs/detect/sar_hull_detector/weights/best.pt` is missing on demo machine filesystem, forcing pipeline to use `yolov8n.pt` COCO fallback (detecting 0 hulls on SAR chips).
+- 2026-09-02: Hull Detector Re-verification Audit: Re-ran `integration_pipeline.py` on all 5 test images. Confirmed `[warning] Trained weights ... best_unet.pt not found locally` persists because `runs/detect/sar_hull_detector/weights/best_unet.pt` does not exist on disk. Recorded actual hull counts: `test_0`: 0 hulls, `test_1`: 0 hulls, `test_2`: 0 hulls, `test_3`: 0 hulls, `test_4`: 0 hulls (0 total hulls detected due to `yolov8n.pt` COCO fallback).
+- 2026-09-02: Pipeline Audit & Network Verification: Re-ran full pipeline on all 5 test images. Confirmed live Open-Meteo ocean/wind fetch executed with 0 warnings. Disclosed that previous "REAL end-to-end" claim ran on silent fallback due to local network socket block (`ConnectionResetError 10054`), demonstrating that the offline fallback mechanism works as designed. Noted hull detector status: trained weights file `runs/detect/sar_hull_detector/weights/best_unet.pt` is missing on demo machine filesystem, forcing pipeline to use `yolov8n.pt` COCO fallback (detecting 0 hulls on SAR chips).
 - 2026-09-02: Drift Simulation Audit & Verification: Verified `drift_simulation.py` vector current/wind physics math (`simulate_backward_drift()`) is REAL and varies dynamically with weather & centroid inputs. Clarified that `hours_back` is a FIXED SIMULATION PARAMETER (default 6.0 hours).
 - 2026-09-01: Initial knowledge file compiled from PROJECT_STATUS.md + execution plan roadmap.

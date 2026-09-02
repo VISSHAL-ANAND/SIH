@@ -20,7 +20,7 @@ import cv2
 from tqdm import tqdm
 from ultralytics import YOLO
 
-WEIGHTS = "runs/detect/sar_hull_detector/weights/best.pt"
+WEIGHTS = "runs/detect/sar_hull_detector/weights/best_unet.pt"
 VAL_IMAGES = Path("sar_ships/images/val")
 VAL_LABELS = Path("sar_ships/labels/val")
 IOU_MATCH_THRESHOLD = 0.5
