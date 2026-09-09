@@ -666,3 +666,15 @@ html, body {
     from { opacity: 0; transform: translateY(6px); }
     to { opacity: 1; transform: translateY(0); }
 }
+
+
+/* Phase 3F — investigation timeline */
+.imw-timeline { display:flex; flex-direction:column; gap:12px; }
+.timeline-empty { font-size:12px; opacity:.65; }
+.imw-timeline-item { display:grid; grid-template-columns:10px 1fr; column-gap:10px; }
+.timeline-dot { width:8px; height:8px; border-radius:50%; margin-top:5px; border:2px solid currentColor; }
+.timeline-content { min-width:0; }
+.timeline-time { font-size:10px; opacity:.6; letter-spacing:.04em; }
+.timeline-title { font-size:12px; font-weight:600; margin-top:2px; }
+.timeline-details { font-size:11px; opacity:.72; margin-top:2px; line-height:1.35; }
+.timeline-source { font-size:9px; opacity:.5; margin-top:3px; text-transform:uppercase; }
