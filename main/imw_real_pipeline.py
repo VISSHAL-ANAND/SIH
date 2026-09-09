@@ -208,6 +208,9 @@ def run_real_pipeline(
         )
         for m in ais_matches
     ]
+    # RF is an explicit evidence channel. Until a real RF provider is supplied,
+    # the package records NOT_AVAILABLE rather than synthetic observations.
+    rf_result = corroborate_rf([], 0.0, 0.0)
     package = build_incident_package(
         incident_id=build_incident_id(timestamp),
         detection={"timestamp": timestamp.isoformat(), "source": "SAR_ANALYSIS"},
@@ -215,9 +218,9 @@ def run_real_pipeline(
         spill={"count": len(components), "components": components},
         ais={"source_status": ais_source_status, "matches": ais_matches},
         drift=drift,
-        rf=corroborate_rf([], 0.0, 0.0),
+        rf=rf_result,
         candidates=candidate_objects,
-        limitations=["RF corroboration is not connected.", "Environmental observations are not yet supplied."],
+        limitations=["RF observations were not supplied.", "Environmental observations are not yet supplied."],
     )
 
     return {
@@ -225,7 +228,7 @@ def run_real_pipeline(
         "pipeline": {
             "status": "completed",
             "data_integrity": "REAL_ONLY",
-            "stages": ["SAR", "SLICK_SEGMENTATION", "GEOLOCATION", "HULL_DETECTION", "AIS_CORRELATION"],
+            "stages": ["SAR", "SLICK_SEGMENTATION", "GEOLOCATION", "HULL_DETECTION", "AIS_CORRELATION", "INCIDENT_PACKAGING"],
         },
         "sar": {
             "filename": path.name,
@@ -249,8 +252,5 @@ def run_real_pipeline(
             "matches": ais_matches,
             "interpretation": "Local AIS activity does not by itself prove an individual vessel disabled AIS. Vessel-history continuity is required before a dark-vessel claim.",
         },
-        "rf": {
-            "status": "NOT_IMPLEMENTED",
-            "data_integrity": "NO_RF_DATA_INJECTED",
-        },
+        "rf": rf_result,
     }
