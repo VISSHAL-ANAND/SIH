@@ -414,23 +414,30 @@ btnDispatch.addEventListener('click', () => {
     if (!payload) return;
     const incidentId = payload.incident_id || 'incident';
     dispatchConfirm.classList.add('visible');
-    $('dispatch-detail').textContent = incidentId + ' | Response draft prepared | Operator review required';
-    btnDispatch.disabled = false;
-    showToast('Coast Guard response draft prepared — not transmitted.', 'success');
-    if (window.renderIncidentResponse) {
-        window.renderIncidentResponse({
+    $('dispatch-detail').textContent = incidentId + ' | Preparing response draft...';
+    btnDispatch.disabled = true;
+    fetch('/api/prepare-response', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
             incident_id: incidentId,
-            status: 'DRAFT_REQUIRES_OPERATOR_CONFIRMATION',
-            summary: {
-                detection_time: payload.detection_time,
-                primary_location: payload.location?.hulls?.[0] || null,
-                spill_count: payload.spill?.count || 0,
-            },
-            candidate_vessels: payload.candidates || [],
-            limitations: [],
-            notice: 'Draft only. Verify evidence and recipient details before any official transmission.'
-        });
-    }
+            slick_centroid: payload.location?.slick_centroid || payload.location?.centroid || [null, null],
+            spill_area_sq_m: payload.spill?.area_sq_m || payload.spill?.area || 0,
+            suspect_vessel: payload.candidates?.[0] || {},
+            threat_score: payload.candidates?.[0]?.evidence_score || 0,
+            evidence_summary: JSON.stringify(payload.evidence_sources)
+        })
+    }).then(r => r.ok ? r.json() : Promise.reject(new Error('Response API returned ' + r.status)))
+      .then(draft => {
+          window.imwPendingResponse = draft;
+          $('dispatch-detail').textContent = incidentId + ' | Response draft ready | Operator review required';
+          btnDispatch.disabled = false;
+          showToast('Coast Guard response draft prepared — not transmitted.', 'success');
+          if (window.renderIncidentResponse) window.renderIncidentResponse(draft);
+      })
+      .catch(err => {
+          btnDispatch.disabled = false;
+          showToast('Could not prepare response draft: ' + err.message, 'warning');
+      });
 });
 
 // ── Phase 3A: dashboard shell state ───────────────────────────────
