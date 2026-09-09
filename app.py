@@ -103,94 +103,28 @@ async def process_sar(
     file: UploadFile = File(...),
     center_lat: Optional[float] = Form(None),
     center_lon: Optional[float] = Form(None),
-    hours_back: float = Form(6.0),
 ):
-    """
-    Accepts an uploaded SAR image (TIFF/PNG/JPG), runs the full 4-stage
-    pipeline (U-Net segmentation → YOLOv8 hull detection → Open-Meteo
-    environment → GNOME backward drift), and returns structured results.
-    """
+    """Canonical IMW SAR endpoint using the real-only pipeline."""
     t_start = time.perf_counter()
-
-    # Save uploaded file
-    safe_name = file.filename or "upload.png"
-    file_path = TEMP_DIR / safe_name
-    contents = await file.read()
-    with open(file_path, "wb") as f:
-        f.write(contents)
-
-    # --- Coordinate extraction ---
-    slick_lat = center_lat
-    slick_lon = center_lon
-    bbox = None
-
-    # Attempt GeoTIFF parsing via rasterio
-    if safe_name.lower().endswith((".tiff", ".tif")):
+    safe_name = Path(file.filename or "upload.png").name
+    file_path = TEMP_DIR / f"{uuid.uuid4().hex[:8]}_{safe_name}"
+    file_path.write_bytes(await file.read())
+    try:
+        result = run_real_pipeline(file_path, center_lat=center_lat, center_lon=center_lon, use_ais=True)
+        result["pipeline_latency_ms"] = round((time.perf_counter() - t_start) * 1000, 2)
+        result["incident_id"] = f"IMW-{uuid.uuid4().hex[:8].upper()}-2026"
+        return {"status": "success", **result}
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"IMW real pipeline unavailable: {exc}")
+    finally:
         try:
-            import rasterio
-            with rasterio.open(str(file_path)) as src:
-                if src.crs is not None:
-                    b = src.bounds
-                    slick_lat = round((b.bottom + b.top) / 2, 4)
-                    slick_lon = round((b.left + b.right) / 2, 4)
-                    bbox = [
-                        [round(b.bottom, 4), round(b.left, 4)],
-                        [round(b.top, 4), round(b.right, 4)],
-                    ]
-        except Exception:
+            file_path.unlink(missing_ok=True)
+        except OSError:
             pass
-
-    # Fallback to form-supplied or demo coordinates
-    if slick_lat is None:
-        slick_lat = 9.3764
-    if slick_lon is None:
-        slick_lon = 75.9758
-    if bbox is None:
-        bbox = [
-            [round(slick_lat - 0.10, 4), round(slick_lon - 0.15, 4)],
-            [round(slick_lat + 0.10, 4), round(slick_lon + 0.15, 4)],
-        ]
-
-    # --- Run 4-stage pipeline ---
-    sar_res = run_sar_segmentation(pixel_count=1000)
-    hull_res = run_hull_detection(slick_lat=slick_lat, slick_lon=slick_lon)
-    env_params = fetch_open_meteo_environment(lat=slick_lat, lon=slick_lon)
-    drift_res = simulate_backward_drift_trajectory(
-        slick_lat=slick_lat,
-        slick_lon=slick_lon,
-        hours_back=hours_back,
-        env_params=env_params,
-    )
-
-    t_end = time.perf_counter()
-    incident_id = f"IMW-{uuid.uuid4().hex[:8].upper()}-2026"
-
-    return {
-        "status": "success",
-        "incident_id": incident_id,
-        "pipeline_latency_ms": round((t_end - t_start) * 1000, 2),
-        "coordinates": {
-            "center_lat": slick_lat,
-            "center_lon": slick_lon,
-            "bbox": bbox,
-        },
-        "spill": {
-            "area_sq_m": sar_res["spill_area_sq_m"],
-            "pixel_count": sar_res["pixel_count"],
-            "shape_classification": sar_res["shape_classification"],
-        },
-        "hull": {
-            "detected": hull_res["hull_detected"],
-            "coordinates": hull_res["coordinates"],
-            "confidence": hull_res["confidence"],
-        },
-        "drift": {
-            "origin_coordinates": drift_res["origin_coordinates"],
-            "drift_distance_km": drift_res["drift_distance_km"],
-            "hours_back": hours_back,
-        },
-        "environment": env_params,
-    }
 
 
 # ---------------------------------------------------------------------------
