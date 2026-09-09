@@ -7,7 +7,7 @@ dark-vessel AIS/RF attribution, and Indian Coast Guard evidence dispatch.
 Endpoints:
   POST /api/process-sar       — SAR image upload + 4-stage pipeline
   POST /api/analyze-traffic   — AIS correlation, track history, RF lock
-  POST /api/dispatch-alert    — GMDSS Coast Guard evidence dossier
+  POST /api/prepare-response  — operator-reviewed Coast Guard response draft
   POST /api/analyze-incident  — Legacy single-call pipeline (retained)
 """
 
@@ -85,13 +85,14 @@ class AnalyzeTrafficRequest(BaseModel):
     capture_time: Optional[str] = None
 
 
-class DispatchAlertRequest(BaseModel):
+class PrepareResponseRequest(BaseModel):
     incident_id: str
     slick_centroid: List[float]
     spill_area_sq_m: float
     suspect_vessel: Dict[str, Any]
     threat_score: float
     evidence_summary: Optional[str] = None
+    recipient: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -204,53 +205,43 @@ async def analyze_traffic(request: AnalyzeTrafficRequest) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# ENDPOINT 3 — COAST GUARD DISPATCH (NEW)
+# ENDPOINT 3 — COAST GUARD RESPONSE DRAFT
 # ---------------------------------------------------------------------------
 
-@app.post("/api/dispatch-alert")
-async def dispatch_alert(request: DispatchAlertRequest) -> Dict[str, Any]:
-    """
-    Compiles a GMDSS-format evidence dossier for the Indian Coast Guard
-    (MRCC Mumbai) and returns it with an HMAC SHA-256 integrity digest.
-    """
+@app.post("/api/prepare-response")
+async def prepare_response(request: PrepareResponseRequest) -> Dict[str, Any]:
+    """Create a reviewable response draft; never transmit automatically."""
     timestamp = datetime.now(timezone.utc).isoformat()
-    dispatch_id = f"ICG-DISPATCH-{uuid.uuid4().hex[:8].upper()}"
-
-    payload = {
-        "dispatch_id": dispatch_id,
-        "timestamp": timestamp,
-        "urgency": "DISTRESS" if request.threat_score >= 0.8 else "PAN-PAN",
-        "recipient": "Indian Coast Guard \u2014 MRCC Mumbai",
-        "incident_id": request.incident_id,
-        "slick_centroid": request.slick_centroid,
-        "spill_area_sq_m": request.spill_area_sq_m,
-        "suspect_vessel": request.suspect_vessel,
-        "threat_score": request.threat_score,
-        "evidence_summary": (
-            request.evidence_summary
-            or "Automated dark-vessel attribution via SAR + AIS + RF fusion"
-        ),
-        "classification": "RESTRICTED // IMW-SIGINT",
-    }
-
-    # HMAC SHA-256 integrity digest
-    secret = b"imw-icg-secret-key-2026"
-    payload_str = json.dumps(payload, sort_keys=True, default=str)
-    digest = hmac_mod.new(secret, payload_str.encode(), hashlib.sha256).hexdigest()
-
+    response_id = f"IMW-RESPONSE-{uuid.uuid4().hex[:8].upper()}"
     return {
-        "status": "dispatched",
-        "dispatch_id": dispatch_id,
+        "status": "DRAFT_REQUIRES_OPERATOR_CONFIRMATION",
+        "response_id": response_id,
         "timestamp": timestamp,
-        "recipient": payload["recipient"],
-        "urgency": payload["urgency"],
-        "classification": payload["classification"],
-        "payload_preview": payload,
-        "hmac_sha256_digest": digest,
+        "recipient": request.recipient or "Indian Coast Guard — operator to confirm",
+        "incident_id": request.incident_id,
+        "urgency": "HIGH" if request.threat_score >= 0.8 else "REVIEW",
+        "payload_preview": {
+            "incident_id": request.incident_id,
+            "slick_centroid": request.slick_centroid,
+            "spill_area_sq_m": request.spill_area_sq_m,
+            "candidate_vessel": request.suspect_vessel,
+            "threat_score": request.threat_score,
+            "evidence_summary": request.evidence_summary,
+        },
+        "operator_confirmation": {
+            "required": True,
+            "confirmed": False,
+            "confirmed_by": None,
+            "confirmed_at": None,
+        },
+        "transmission": {
+            "status": "NOT_SENT",
+            "sent_at": None,
+        },
+        "notice": "Draft only. Verify evidence and recipient details before any official transmission.",
     }
 
 
-# ---------------------------------------------------------------------------
 # LEGACY ENDPOINT — SINGLE-CALL PIPELINE (RETAINED)
 # ---------------------------------------------------------------------------
 
