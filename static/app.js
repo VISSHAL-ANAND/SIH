@@ -450,3 +450,19 @@ btnDispatch.addEventListener('click', async () => {
             '<i class="fa-solid fa-tower-broadcast"></i> Dispatch Evidence to Coast Guard';
     }
 });
+
+
+// ── Phase 3A: dashboard shell state ───────────────────────────────
+const imwPhase3 = { status: 'READY', incidentId: null };
+
+function setDashboardState(state, incidentId = null) {
+    imwPhase3.status = state;
+    imwPhase3.incidentId = incidentId;
+    document.body.dataset.imwState = state.toLowerCase();
+    const overlayText = document.querySelector('.processing-text');
+    const overlaySub = document.querySelector('.processing-sub');
+    if (overlayText) overlayText.textContent = state === 'READY' ? 'IMW READY' : state === 'ANALYZING' ? 'Analyzing SAR Intelligence' : state === 'INCIDENT' ? 'Incident Evidence Ready' : state;
+    if (overlaySub) overlaySub.textContent = incidentId ? 'Incident ' + incidentId : 'SAR → Spill → AIS → Evidence';
+}
+
+setDashboardState('READY');
