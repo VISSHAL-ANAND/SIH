@@ -133,82 +133,73 @@ async def process_sar(
 
 @app.post("/api/analyze-traffic")
 async def analyze_traffic(request: AnalyzeTrafficRequest) -> Dict[str, Any]:
-    """
-    Cross-checks hull coordinates against AIS broadcasts, generates a
-    simulated 24-hour AIS track with blackout event, and returns RF
-    intercept lock coordinates for dark vessels.
-    """
-    # Sensor fusion — Haversine AIS correlation
-    fusion = correlate_hull_with_ais(
-        hull_lat=request.hull_lat,
-        hull_lon=request.hull_lon,
-        tolerance_km=5.0,
-    )
+    """Return only real AIS correlation metadata; RF/track reconstruction is not fabricated."""
+    from main.ais_matcher import AIS_CSV_PATH, load_ais_data, assess_ais_coverage, match_hull_to_ais
 
-    # Simulated 24h AIS track history
-    now = datetime.now(timezone.utc)
-    ais_track: List[Dict[str, Any]] = []
-    blackout_point: Optional[Dict[str, Any]] = None
-
-    if fusion["is_dark_vessel"]:
-        # Vessel was transmitting for 16 hours, then went dark ~8h ago
-        base_lat = request.hull_lat - 0.48
-        base_lon = request.hull_lon + 0.32
-        for i in range(16):
-            t = now - timedelta(hours=24 - i)
-            ais_track.append({
-                "lat": round(base_lat + i * 0.028, 4),
-                "lon": round(base_lon - i * 0.019, 4),
-                "timestamp": t.isoformat(),
-                "sog": round(12.5 + i * 0.3, 1),
-                "status": "TRANSMITTING",
-            })
-        # Last known AIS position = blackout point
-        blackout_point = {
-            "lat": ais_track[-1]["lat"],
-            "lon": ais_track[-1]["lon"],
-            "timestamp": ais_track[-1]["timestamp"],
-            "event": "AIS_DISABLED",
+    ais_path = Path(AIS_CSV_PATH)
+    if not ais_path.exists():
+        return {
+            "status": "success",
+            "data_integrity": "REAL_ONLY",
+            "ais_status": "NO_AIS_COVERAGE",
+            "is_dark_vessel": False,
+            "rf_intercept": {"status": "NOT_IMPLEMENTED"},
+            "ais_track": [],
+            "surrounding_traffic": [],
+            "attribution_reason": "Configured AIS source is unavailable; no vessel attribution is made.",
         }
 
-    # Surrounding traffic within 50 km
-    surrounding: List[Dict[str, Any]] = []
-    for vessel in MOCK_AIS_BROADCASTS:
-        dist = haversine_km(
-            request.slick_lat, request.slick_lon,
-            vessel["lat"], vessel["lon"],
-        )
-        if dist < 50.0:
-            surrounding.append({
-                **vessel,
-                "distance_km": round(dist, 2),
-                "ais_status": "ACTIVE",
-            })
+    ais_df = load_ais_data(str(ais_path))
+    capture_time = (
+        datetime.fromisoformat(request.capture_time.replace("Z", "+00:00")).replace(tzinfo=None)
+        if request.capture_time
+        else datetime.now(timezone.utc).replace(tzinfo=None)
+    )
+    coverage = assess_ais_coverage(
+        ais_df, request.hull_lat, request.hull_lon, capture_time
+    )
+    match = match_hull_to_ais(
+        request.hull_lat, request.hull_lon, capture_time, ais_df, hull_id=0
+    )
 
-    # Suspect vessel profile
-    suspect = {
-        "name": "UNKNOWN VESSEL" if fusion["is_dark_vessel"] else "---",
-        "mmsi": "---",
-        "flag": "UNIDENTIFIED",
-        "type": "Dark Vessel (AIS Non-Compliant)" if fusion["is_dark_vessel"] else "Unknown",
-        "coordinates": fusion["target_vessel_coordinates"],
-        "threat_score": fusion["threat_score"],
-    }
-
+    status = "AIS_MATCHED" if match.has_ais_match else coverage.status
     return {
         "status": "success",
-        "suspect_vessel": suspect,
-        "ais_status": fusion["ais_status"],
-        "is_dark_vessel": fusion["is_dark_vessel"],
-        "rf_intercept": {
-            "match": fusion["rf_intercept_match"],
-            "signature": fusion["rf_signature"],
-            "lock_coordinates": fusion["target_vessel_coordinates"],
+        "data_integrity": "REAL_ONLY",
+        "ais_status": status,
+        "is_dark_vessel": bool(status == "AIS_GAP"),
+        "suspect_vessel": {
+            "name": match.matched_vessel_name or "UNIDENTIFIED",
+            "mmsi": match.matched_mmsi or "---",
+            "flag": "UNKNOWN",
+            "type": "AIS-correlated vessel" if match.has_ais_match else "Unresolved SAR hull",
+            "coordinates": [request.hull_lat, request.hull_lon],
+            "threat_score": match.suspicion_score,
         },
-        "ais_track": ais_track,
-        "ais_blackout_point": blackout_point,
-        "surrounding_traffic": surrounding,
-        "attribution_reason": fusion["attribution_reason"],
+        "rf_intercept": {
+            "status": "NOT_IMPLEMENTED",
+            "match": False,
+            "signature": None,
+            "lock_coordinates": None,
+        },
+        "ais_track": [],
+        "ais_blackout_point": None,
+        "surrounding_traffic": [],
+        "attribution_reason": coverage.reason if not match.has_ais_match else match.reason,
+        "ais_match": {
+            "matched_mmsi": match.matched_mmsi,
+            "matched_vessel_name": match.matched_vessel_name,
+            "distance_km": match.distance_km,
+            "time_diff_hours": match.time_diff_hours,
+            "suspicion_score": match.suspicion_score,
+        },
+        "coverage": {
+            "status": coverage.status,
+            "records_in_time_window": coverage.records_in_time_window,
+            "nearby_records": coverage.nearby_records,
+            "confidence": coverage.coverage_confidence,
+            "reason": coverage.reason,
+        },
     }
 
 
