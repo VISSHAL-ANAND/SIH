@@ -217,6 +217,7 @@ def run_real_pipeline(
         geolocation={"hulls": georef_hulls},
         spill={"count": len(components), "components": components},
         ais={"source_status": ais_source_status, "matches": ais_matches},
+        environmental={"status": "NOT_AVAILABLE", "reason": "No environmental observations supplied to this run."},
         drift=drift,
         rf=rf_result,
         candidates=candidate_objects,
