@@ -24,6 +24,7 @@ from .trajectory_evidence import analyze_trajectory, trajectory_to_dict
 from .drift_backtrack import backtrack_spill, drift_to_dict
 from .evidence_fusion import fuse_evidence, fusion_to_dict
 from .incident_package import CandidateVessel, build_incident_package, incident_to_dict
+from .rf_corroboration import corroborate_rf
 
 
 def load_rgb_image(path: str | Path) -> np.ndarray:
@@ -214,6 +215,7 @@ def run_real_pipeline(
         spill={"count": len(components), "components": components},
         ais={"source_status": ais_source_status, "matches": ais_matches},
         drift=drift,
+        rf=corroborate_rf([], 0.0, 0.0),
         candidates=candidate_objects,
         limitations=["RF corroboration is not connected.", "Environmental observations are not yet supplied."],
     )
