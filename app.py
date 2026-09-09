@@ -45,6 +45,7 @@ if str(BASE_DIR) not in sys.path:
 from models import run_sar_segmentation, run_hull_detection, classify_slick_pca_shape
 from physics import fetch_open_meteo_environment, simulate_backward_drift_trajectory
 from sensor_fusion import correlate_hull_with_ais, haversine_km, MOCK_AIS_BROADCASTS
+from main.imw_real_pipeline import run_real_pipeline
 
 # ---------------------------------------------------------------------------
 # APP INIT
