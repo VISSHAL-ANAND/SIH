@@ -57,6 +57,7 @@ def build_incident_package(
     ais: dict[str, Any],
     environmental: dict[str, Any] | None = None,
     drift: dict[str, Any] | None = None,
+    rf: dict[str, Any] | None = None,
     candidates: list[CandidateVessel] | None = None,
     limitations: list[str] | None = None,
 ) -> IncidentEvidencePackage:
@@ -71,6 +72,7 @@ def build_incident_package(
         ais=ais,
         environmental=environmental or {"status": "NOT_AVAILABLE"},
         drift=drift or {"status": "AWAITING_ENVIRONMENTAL_DATA"},
+        rf=rf or {"status": "NOT_AVAILABLE", "records": [], "reason": "No RF observations were supplied."},
         candidates=candidates or [],
         limitations=limitations or [],
     )
