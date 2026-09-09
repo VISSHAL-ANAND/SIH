@@ -469,3 +469,36 @@ function setDashboardState(state, incidentId = null) {
 }
 
 setDashboardState('READY');
+
+
+// ── Phase 3C: canonical incident adapter ─────────────────────────
+function getCanonicalIncident(payload) {
+    return payload?.incident || payload?.data?.incident || payload || null;
+}
+
+function renderCanonicalIncident(payload) {
+    const incident = getCanonicalIncident(payload);
+    if (!incident) return;
+
+    currentIncident = incident;
+    const candidates = Array.isArray(incident.candidates) ? incident.candidates : [];
+    const first = candidates[0];
+
+    // Populate stable incident identifiers without assuming legacy field names.
+    const idEl = $('incident-id');
+    if (idEl) idEl.textContent = incident.incident_id || '—';
+
+    const statusEl = $('incident-status');
+    if (statusEl) statusEl.textContent = (incident.status || 'UNDER_INVESTIGATION').replaceAll('_', ' ');
+
+    const countEl = $('candidate-count');
+    if (countEl) countEl.textContent = String(candidates.length);
+
+    // Prefer the canonical evidence-fusion result.
+    const fusion = first?.association || {};
+    const score = typeof fusion.score === 'number' ? Math.round(fusion.score * 100) : null;
+    const scoreEl = $('evidence-score');
+    if (scoreEl) scoreEl.textContent = score === null ? '—' : score + '%';
+
+    setDashboardState('INCIDENT', incident.incident_id || null);
+}
