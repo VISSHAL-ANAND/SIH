@@ -16,7 +16,7 @@ from PIL import Image
 
 from .predict_and_classify import load_model, predict_and_classify
 from .ship_detection_module import detect_hulls, _try_extract_timestamp
-from .ais_matcher import load_ais_data, match_all_hulls, AIS_CSV_PATH
+from .ais_matcher import load_ais_data, match_all_hulls, assess_ais_coverage, AIS_CSV_PATH
 from .geolocation import extract_geotiff_coords, compute_image_bounds
 
 
@@ -136,7 +136,14 @@ def run_real_pipeline(
                     "lon": hull["lon"],
                     "timestamp": ts,
                 })
-            for result in match_all_hulls(hull_dicts, relevant):
+            for hull_dict in hull_dicts:
+                result = match_all_hulls([hull_dict], relevant)[0]
+                coverage = assess_ais_coverage(
+                    ais_df,
+                    hull_dict["lat"],
+                    hull_dict["lon"],
+                    hull_dict["timestamp"],
+                )
                 ais_matches.append({
                     "hull_id": result.hull_id,
                     "has_ais_match": result.has_ais_match,
@@ -146,6 +153,9 @@ def run_real_pipeline(
                     "time_diff_hours": result.time_diff_hours,
                     "suspicion_score": result.suspicion_score,
                     "reason": result.reason,
+                    "coverage_status": coverage.status,
+                    "coverage_confidence": coverage.coverage_confidence,
+                    "coverage_reason": coverage.reason,
                 })
         else:
             ais_source_status = "UNAVAILABLE"
@@ -175,6 +185,7 @@ def run_real_pipeline(
         "ais": {
             "source_status": ais_source_status,
             "matches": ais_matches,
+            "interpretation": "AIS_GAP requires evidence of nearby AIS traffic; missing coverage is not treated as deliberate shutdown.",
         },
         "rf": {
             "status": "NOT_IMPLEMENTED",
