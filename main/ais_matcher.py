@@ -187,6 +187,81 @@ def load_ais_data(csv_path: str) -> pd.DataFrame:
 
 
 # =============================================================================
+# COVERAGE-AWARE CORRELATION
+# =============================================================================
+
+@dataclass
+class AISCoverageResult:
+    status: str
+    records_in_time_window: int
+    nearby_records: int
+    coverage_confidence: float
+    reason: str
+
+
+def assess_ais_coverage(
+    ais_df: pd.DataFrame,
+    hull_lat: float,
+    hull_lon: float,
+    hull_time: datetime,
+    radius_km: float = DISTANCE_TOLERANCE_KM,
+    time_hours: float = TIME_TOLERANCE_HOURS,
+) -> AISCoverageResult:
+    """
+    Separate 'AIS gap' from 'no AIS coverage'.
+
+    Coverage is UNKNOWN/INSUFFICIENT when the supplied AIS feed has no records
+    in the surrounding temporal/geographic region. A true AIS gap requires
+    evidence that the feed was operational around the scene/time but this
+    vessel was absent.
+    """
+    if ais_df.empty:
+        return AISCoverageResult(
+            status="NO_AIS_COVERAGE",
+            records_in_time_window=0,
+            nearby_records=0,
+            coverage_confidence=0.0,
+            reason="AIS source contains no records for this analysis window.",
+        )
+
+    time_diffs = (ais_df["timestamp"] - hull_time).abs()
+    temporal = ais_df[time_diffs <= timedelta(hours=time_hours)].copy()
+
+    if temporal.empty:
+        return AISCoverageResult(
+            status="NO_AIS_COVERAGE",
+            records_in_time_window=0,
+            nearby_records=0,
+            coverage_confidence=0.0,
+            reason="AIS feed has no records near the SAR detection time; an AIS gap cannot be proven.",
+        )
+
+    distances = haversine_km(
+        hull_lat, hull_lon,
+        temporal["lat"].to_numpy(), temporal["lon"].to_numpy()
+    )
+    nearby = temporal[distances <= radius_km]
+
+    # Nearby traffic demonstrates that the source is geographically active.
+    if len(nearby) > 0:
+        return AISCoverageResult(
+            status="AIS_GAP",
+            records_in_time_window=len(temporal),
+            nearby_records=len(nearby),
+            coverage_confidence=min(1.0, len(nearby) / 5.0),
+            reason="AIS traffic is present around the scene/time, but no matching broadcast was found for the detected hull.",
+        )
+
+    return AISCoverageResult(
+        status="NO_LOCAL_AIS_COVERAGE",
+        records_in_time_window=len(temporal),
+        nearby_records=0,
+        coverage_confidence=0.1,
+        reason="AIS feed is temporally active but provides no nearby traffic; absence cannot be attributed to deliberate AIS shutdown.",
+    )
+
+
+# =============================================================================
 # MATCH ONE HULL TO AIS
 # =============================================================================
 
