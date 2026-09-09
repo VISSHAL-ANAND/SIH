@@ -185,7 +185,7 @@ def run_real_pipeline(
         "ais": {
             "source_status": ais_source_status,
             "matches": ais_matches,
-            "interpretation": "AIS_GAP requires evidence of nearby AIS traffic; missing coverage is not treated as deliberate shutdown.",
+            "interpretation": "Local AIS activity does not by itself prove an individual vessel disabled AIS. Vessel-history continuity is required before a dark-vessel claim.",
         },
         "rf": {
             "status": "NOT_IMPLEMENTED",
