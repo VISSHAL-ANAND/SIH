@@ -562,3 +562,55 @@ function renderIncidentMap(incident) {
 
     if (points.length > 0) map.fitBounds(L.latLngBounds(points), { padding: [30, 30], maxZoom: 12 });
 }
+
+
+// ── Phase 3E: vessel investigation panel adapter ─────────────────
+function renderVesselInvestigation(candidate) {
+    if (!candidate) return;
+
+    const set = (id, value) => {
+        const el = $(id);
+        if (el) el.textContent = value ?? '—';
+    };
+
+    set('ship-name', candidate.vessel_name || 'Unknown vessel');
+    set('ship-mmsi', candidate.mmsi || '—');
+
+    const association = candidate.association || {};
+    const classification = association.classification || 'UNRESOLVED';
+    set('ship-confidence', classification.replaceAll('_', ' '));
+
+    const score = typeof association.score === 'number'
+        ? Math.round(association.score * 100) + '%'
+        : '—';
+    set('threat-score', score);
+
+    const bar = $('threat-bar');
+    if (bar) bar.style.width = typeof association.score === 'number'
+        ? Math.max(0, Math.min(100, association.score * 100)) + '%'
+        : '0%';
+
+    const ais = currentIncident?.ais || {};
+    const aisBadge = $('ais-badge');
+    if (aisBadge) {
+        aisBadge.textContent = ais.source_status || 'AVAILABLE';
+        aisBadge.className = 'status-badge ' + (ais.matches?.length ? 'active' : 'neutral');
+    }
+
+    const rfBadge = $('rf-lock-badge');
+    if (rfBadge) rfBadge.textContent = currentIncident?.rf?.status || 'NOT AVAILABLE';
+
+    const darkBadge = $('dark-vessel-badge');
+    if (darkBadge) {
+        const noMatch = association.classification === 'UNRESOLVED' ||
+                        association.classification === 'WEAK_CANDIDATE';
+        darkBadge.textContent = noMatch ? 'REVIEW' : 'NO';
+    }
+
+    setDashboardState('INCIDENT', currentIncident?.incident_id || null);
+}
+
+function selectIncidentCandidate(index = 0) {
+    const candidates = currentIncident?.candidates || [];
+    if (candidates[index]) renderVesselInvestigation(candidates[index]);
+}
