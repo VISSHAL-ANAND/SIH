@@ -242,14 +242,15 @@ def assess_ais_coverage(
     )
     nearby = temporal[distances <= radius_km]
 
-    # Nearby traffic demonstrates that the source is geographically active.
+    # Nearby traffic only establishes that the feed is locally active.
+    # It does NOT prove that the detected hull itself had AIS disabled.
     if len(nearby) > 0:
         return AISCoverageResult(
-            status="AIS_GAP",
+            status="LOCAL_AIS_ACTIVITY",
             records_in_time_window=len(temporal),
             nearby_records=len(nearby),
             coverage_confidence=min(1.0, len(nearby) / 5.0),
-            reason="AIS traffic is present around the scene/time, but no matching broadcast was found for the detected hull.",
+            reason="AIS traffic is present around the scene/time; an individual vessel gap requires vessel-history evidence.",
         )
 
     return AISCoverageResult(
