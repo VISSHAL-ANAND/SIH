@@ -408,52 +408,30 @@ function populateShipCard(traffic) {
     $('ship-type').textContent = sv.type || '—';
 }
 
-// ── Dispatch Button Handler ─────────────────────────────────────────
-btnDispatch.addEventListener('click', async () => {
-    if (!currentIncident || !currentTraffic) return;
-
-    btnDispatch.disabled = true;
-    btnDispatch.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Dispatching...';
-
-    try {
-        const resp = await fetch('/api/dispatch-alert', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                incident_id: currentIncident.incident_id,
-                slick_centroid: [
-                    currentIncident.coordinates.center_lat,
-                    currentIncident.coordinates.center_lon,
-                ],
-                spill_area_sq_m: currentIncident.spill.area_sq_m,
-                suspect_vessel: currentTraffic.suspect_vessel,
-                threat_score: currentTraffic.suspect_vessel.threat_score,
-                evidence_summary: currentTraffic.attribution_reason,
-            }),
+// ── Response preparation — no automatic transmission ─────────────────
+btnDispatch.addEventListener('click', () => {
+    const payload = prepareCoastGuardResponse(currentIncident);
+    if (!payload) return;
+    const incidentId = payload.incident_id || 'incident';
+    dispatchConfirm.classList.add('visible');
+    $('dispatch-detail').textContent = incidentId + ' | Response draft prepared | Operator review required';
+    btnDispatch.disabled = false;
+    showToast('Coast Guard response draft prepared — not transmitted.', 'success');
+    if (window.renderIncidentResponse) {
+        window.renderIncidentResponse({
+            incident_id: incidentId,
+            status: 'DRAFT_REQUIRES_OPERATOR_CONFIRMATION',
+            summary: {
+                detection_time: payload.detection_time,
+                primary_location: payload.location?.hulls?.[0] || null,
+                spill_count: payload.spill?.count || 0,
+            },
+            candidate_vessels: payload.candidates || [],
+            limitations: [],
+            notice: 'Draft only. Verify evidence and recipient details before any official transmission.'
         });
-
-        if (!resp.ok) throw new Error('Dispatch failed');
-        const data = await resp.json();
-
-        // Show confirmation
-        dispatchConfirm.classList.add('visible');
-        $('dispatch-detail').textContent =
-            data.dispatch_id + ' → ' + data.recipient +
-            ' | Urgency: ' + data.urgency +
-            ' | ' + data.timestamp.slice(0, 19).replace('T', ' ') + ' UTC';
-
-        showToast('Evidence transmitted to Indian Coast Guard', 'success');
-
-    } catch (err) {
-        console.error(err);
-        showToast('Dispatch failed: ' + err.message, 'error');
-        btnDispatch.disabled = false;
-    } finally {
-        btnDispatch.innerHTML =
-            '<i class="fa-solid fa-tower-broadcast"></i> Dispatch Evidence to Coast Guard';
     }
 });
-
 
 // ── Phase 3A: dashboard shell state ───────────────────────────────
 const imwPhase3 = { status: 'READY', incidentId: null };
