@@ -40,7 +40,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-WEIGHTS_PATH = "runs/detect/sar_hull_detector/weights/best_unet.pt"
+WEIGHTS_PATH = str(Path(__file__).resolve().parent.parent / "runs" / "detect" / "sar_hull_detector" / "weights" / "best_unet.pt")
 CONF_THRESHOLD = 0.25
 IOU_THRESHOLD = 0.45
 
@@ -53,9 +53,10 @@ def _get_model():
         from ultralytics import YOLO
         weights = WEIGHTS_PATH
         if not Path(weights).exists():
-            print(f"[warning] Trained weights {WEIGHTS_PATH} not found locally. "
-                  f"Falling back to pretrained 'yolov8n.pt' for demo/pipeline execution.")
-            weights = "yolov8n.pt"
+            raise FileNotFoundError(
+                f"Trained SAR hull weights not found: {weights}. "
+                "IMW will not substitute a generic pretrained detector."
+            )
         _model = YOLO(weights)
     return _model
 
