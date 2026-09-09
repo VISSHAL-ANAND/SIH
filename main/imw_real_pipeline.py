@@ -91,6 +91,10 @@ def filter_ais_for_hulls(ais_df, hulls: list[dict], radius_km: float = 25.0,
     return window.loc[np.logical_or.reduce(masks)].copy() if masks else window.iloc[0:0].copy()
 
 
+def build_incident_id(timestamp: datetime) -> str:
+    return f"IMW-{timestamp.strftime('%Y%m%d-%H%M%S')}"
+
+
 def run_real_pipeline(
     image_path: str | Path,
     center_lat: float | None = None,
@@ -204,7 +208,7 @@ def run_real_pipeline(
         for m in ais_matches
     ]
     package = build_incident_package(
-        incident_id=f"IMW-{timestamp.strftime('%Y%m%d-%H%M%S')}",
+        incident_id=build_incident_id(timestamp),
         detection={"timestamp": timestamp.isoformat(), "source": "SAR_ANALYSIS"},
         geolocation={"hulls": georef_hulls},
         spill={"count": len(components), "components": components},
