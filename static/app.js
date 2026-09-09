@@ -637,3 +637,43 @@ function renderIncidentTimeline(incident) {
             '</div></div>';
     }).join('');
 }
+
+
+// ── Phase 3G: canonical incident response adapter ────────────────
+function buildIncidentResponsePayload(incident) {
+    if (!incident) return null;
+    const location = incident.geolocation || {};
+    return {
+        incident_id: incident.incident_id,
+        status: incident.status,
+        detection_time: incident.detection?.timestamp || null,
+        location: location,
+        spill: incident.spill || {},
+        candidates: (incident.candidates || []).map(v => ({
+            mmsi: v.mmsi,
+            vessel_name: v.vessel_name,
+            classification: v.association?.classification || 'UNRESOLVED',
+            evidence_score: v.association?.score ?? null,
+        })),
+        evidence_sources: {
+            ais: incident.ais?.source_status || 'NOT_AVAILABLE',
+            drift: incident.drift?.status || 'NOT_AVAILABLE',
+            rf: incident.rf?.status || 'NOT_AVAILABLE',
+        },
+    };
+}
+
+function prepareCoastGuardResponse() {
+    const payload = buildIncidentResponsePayload(currentIncident);
+    if (!payload) {
+        showToast('No incident evidence is available for response.', 'warning');
+        return null;
+    }
+    // Keep this adapter side-effect free until the operator explicitly confirms dispatch.
+    window.imwPendingResponse = payload;
+    return payload;
+}
+
+function clearPendingResponse() {
+    window.imwPendingResponse = null;
+}
