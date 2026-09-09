@@ -212,71 +212,42 @@ async function handleFile(file) {
 function renderSpillOnMap(sar) {
     const bb = sar.coordinates.bbox;
     const center = [sar.coordinates.center_lat, sar.coordinates.center_lon];
+    const component = (sar.slicks.components || []).find(c => c.geolocation) || sar.slicks.components?.[0];
+    const shape = component?.shape_class || 'unknown';
+    const area = component?.area_pixels ?? 0;
 
-    // Spill bounding box (red rectangle)
-    L.rectangle(bb, {
-        color: '#dc2626',
-        weight: 2,
-        fillColor: '#dc2626',
-        fillOpacity: 0.12,
-        dashArray: '6 4',
-    }).addTo(spillLayer).bindPopup(
-        '<b>Oil Spill Footprint</b><br>' +
-        'Area: ' + (sar.spill.area_sq_m / 1e6).toFixed(2) + ' km²<br>' +
-        'Shape: ' + sar.spill.shape_classification.shape_class
-    );
+    if (bb[0][0] !== bb[1][0] || bb[0][1] !== bb[1][1]) {
+        L.rectangle(bb, {
+            color: '#dc2626', weight: 2, fillColor: '#dc2626',
+            fillOpacity: 0.12, dashArray: '6 4',
+        }).addTo(spillLayer).bindPopup(
+            '<b>Oil Spill Footprint</b><br>Area: ' + area + ' px<br>Shape: ' + shape
+        );
+    }
 
-    // Spill centroid marker (red circle)
     L.circleMarker(center, {
-        radius: 7,
-        color: '#dc2626',
-        fillColor: '#dc2626',
-        fillOpacity: 0.8,
-        weight: 2,
+        radius: 7, color: '#dc2626', fillColor: '#dc2626',
+        fillOpacity: 0.8, weight: 2,
     }).addTo(spillLayer).bindPopup(
         '<b>Spill Centroid</b><br>' +
         center[0].toFixed(4) + '°N, ' + center[1].toFixed(4) + '°E'
     );
 
-    // Hull detection marker (orange pulsing diamond)
-    const hullCoords = sar.hull.coordinates;
-    const suspectIcon = L.divIcon({
-        className: 'marker-suspect',
-        html: '<div class="marker-suspect-inner"></div>',
-        iconSize: [24, 24],
-        iconAnchor: [12, 12],
-    });
-    L.marker(hullCoords, { icon: suspectIcon })
-        .addTo(hullLayer)
-        .bindPopup(
-            '<b>YOLOv8 Hull Detection</b><br>' +
-            'Confidence: ' + (sar.hull.confidence * 100).toFixed(0) + '%<br>' +
-            hullCoords[0].toFixed(4) + '°N, ' + hullCoords[1].toFixed(4) + '°E'
-        );
-
-    // Drift origin marker (blue triangle)
-    const orig = sar.drift.origin_coordinates;
-    L.circleMarker(orig, {
-        radius: 7,
-        color: '#1d4ed8',
-        fillColor: '#1d4ed8',
-        fillOpacity: 0.8,
-        weight: 2,
-    }).addTo(driftLayer).bindPopup(
-        '<b>Estimated Spill Origin</b><br>' +
-        'GNOME 3% Wind Backward Drift<br>' +
-        orig[0].toFixed(4) + '°N, ' + orig[1].toFixed(4) + '°E<br>' +
-        'Drift: ' + sar.drift.drift_distance_km.toFixed(2) + ' km over ' +
-        sar.drift.hours_back + 'h'
-    );
-
-    // Drift line (dashed blue)
-    L.polyline([center, orig], {
-        color: '#1d4ed8',
-        weight: 2,
-        dashArray: '8 6',
-        opacity: 0.6,
-    }).addTo(driftLayer);
+    const hull = (sar.hulls?.detections || []).find(h => h.lat !== null && h.lon !== null);
+    if (hull) {
+        const suspectIcon = L.divIcon({
+            className: 'marker-suspect',
+            html: '<div class="marker-suspect-inner"></div>',
+            iconSize: [24, 24], iconAnchor: [12, 12],
+        });
+        L.marker([hull.lat, hull.lon], { icon: suspectIcon })
+            .addTo(hullLayer)
+            .bindPopup(
+                '<b>SAR Hull Detection</b><br>' +
+                'Confidence: ' + (hull.confidence * 100).toFixed(0) + '%<br>' +
+                hull.lat.toFixed(4) + '°N, ' + hull.lon.toFixed(4) + '°E'
+            );
+    }
 }
 
 // ── Render AIS Track, Blackout, RF Lock, Surrounding Traffic ────────
