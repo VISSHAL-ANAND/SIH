@@ -614,3 +614,26 @@ function selectIncidentCandidate(index = 0) {
     const candidates = currentIncident?.candidates || [];
     if (candidates[index]) renderVesselInvestigation(candidates[index]);
 }
+
+
+// ── Phase 3F: render canonical investigation timeline ─────────────
+function renderIncidentTimeline(incident) {
+    const container = $('imw-timeline');
+    if (!container) return;
+    const events = Array.isArray(incident?.timeline) ? incident.timeline : [];
+    if (!events.length) {
+        container.innerHTML = '<div class="timeline-empty">No investigation events recorded.</div>';
+        return;
+    }
+    container.innerHTML = events.map(event => {
+        const time = event.timestamp ? String(event.timestamp).replace('T', ' ').replace('Z', ' UTC') : '—';
+        return '<div class="imw-timeline-item">' +
+            '<div class="timeline-dot"></div>' +
+            '<div class="timeline-content">' +
+            '<div class="timeline-time">' + escapeHtml(time) + '</div>' +
+            '<div class="timeline-title">' + escapeHtml(event.title || event.event_type || 'Event') + '</div>' +
+            '<div class="timeline-details">' + escapeHtml(event.details || '') + '</div>' +
+            '<div class="timeline-source">' + escapeHtml(event.source || 'SYSTEM') + '</div>' +
+            '</div></div>';
+    }).join('');
+}
