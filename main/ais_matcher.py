@@ -13,7 +13,7 @@ from pathlib import Path
 
 # Your actual MarineCadastre AIS file.
 # IMPORTANT: your file does NOT have a .csv extension.
-AIS_CSV_PATH = str(Path(__file__).parent / "AIS_CSV_PATH" / "ais-2025-01-01")
+AIS_CSV_PATH = str(Path(__file__).parent.parent / "AIS_CSV_PATH" / "ais-2025-01-01")
 
 # NOTE (2026-08-30): we tried swapping this for Global Fishing Watch's API
 # for genuine global coverage (MarineCadastre is US-only, doesn't cover our
@@ -210,6 +210,23 @@ def match_hull_to_ais(
         time difference <= TIME_TOLERANCE_HOURS
     """
 
+    # An empty synthetic/filtered feed is a legitimate AIS-off scenario, not
+    # a pandas arithmetic error.  Handle it before calculating time deltas.
+    if ais_df.empty:
+        return AISMatchResult(
+            hull_id=hull_id,
+            has_ais_match=False,
+            matched_mmsi=None,
+            matched_vessel_name=None,
+            distance_km=None,
+            time_diff_hours=None,
+            suspicion_score=0.90,
+            reason=(
+                f"No AIS broadcasts found within "
+                f"{TIME_TOLERANCE_HOURS} hours of detection time."
+            ),
+        )
+
     # -------------------------------------------------------------------------
     # STEP 1: TIME FILTER
     # -------------------------------------------------------------------------
@@ -272,12 +289,6 @@ def match_hull_to_ais(
             nearest["distance_km"]
         )
 
-        # Higher distance = higher suspicion.
-        suspicion = min(
-            0.95,
-            0.50 + nearest_distance / 50
-        )
-
         return AISMatchResult(
             hull_id=hull_id,
             has_ais_match=False,
@@ -288,10 +299,10 @@ def match_hull_to_ais(
                 2
             ),
             time_diff_hours=None,
-            suspicion_score=round(
-                suspicion,
-                2
-            ),
+            # A SAR hull with no AIS broadcast in the spatial tolerance is a
+            # dark-vessel suspect, even when unrelated AIS traffic exists in
+            # the time window.
+            suspicion_score=0.90,
             reason=(
                 f"Nearest AIS ping was "
                 f"{nearest_distance:.1f} km away -- "
@@ -461,6 +472,41 @@ def generate_synthetic_ais(
         )
 
     return pd.DataFrame(rows)
+
+
+def generate_synthetic_ais_for_hulls(
+    hulls: list[dict],
+    image_id: str,
+    missing_rate: float = 0.15,
+    seed: int = 42,
+) -> pd.DataFrame:
+    """Create deterministic test pings for a single image's detected hulls.
+
+    Approximately ``missing_rate`` of hulls deliberately receive no ping, so
+    batch evaluation exercises the AIS-off/RF validation path.  This is test
+    data only and must never be represented as real AIS telemetry.
+    """
+    if not 0.0 <= missing_rate < 1.0:
+        raise ValueError("missing_rate must be in the range [0, 1).")
+
+    # A stable per-image seed means RF and AIS outcomes are reproducible while
+    # still varying across the batch.
+    image_seed = seed + sum((index + 1) * ord(char) for index, char in enumerate(image_id))
+    rng = np.random.default_rng(image_seed)
+    rows = []
+
+    for hull in hulls:
+        if rng.random() < missing_rate:
+            continue
+        rows.append({
+            "mmsi": 300000000 + len(rows),
+            "lat": hull["lat"],
+            "lon": hull["lon"],
+            "timestamp": hull["timestamp"],
+            "vessel_name": f"SYNTH_COOPERATIVE_{hull['hull_id']}",
+        })
+
+    return pd.DataFrame(rows, columns=["mmsi", "lat", "lon", "timestamp", "vessel_name"])
 
 
 # =============================================================================

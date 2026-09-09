@@ -16,7 +16,7 @@ import numpy as np
 import torch
 import segmentation_models_pytorch as smp
 
-from shape_classifier import classify_slick_shape, components_to_dicts
+from .shape_classifier import classify_slick_shape, components_to_dicts
 
 CHECKPOINT_PATH = "data/processed/best_unet.pt"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"

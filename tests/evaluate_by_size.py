@@ -11,7 +11,7 @@ augmentation settings handled it.
 
 Usage
 -----
-    python evaluate_by_size.py
+    python -m tests.evaluate_by_size
 """
 
 from pathlib import Path

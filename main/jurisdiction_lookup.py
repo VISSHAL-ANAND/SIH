@@ -19,7 +19,8 @@ from shapely.geometry import Point, Polygon
 # Representative Indian EEZ & Territorial Zone Boundaries (WGS84 EPSG:4326)
 _ZONE_POLYGONS = {
     "Indian EEZ (West Coast - ICG Regional HQ West / Gandhinagar & Mumbai)": Polygon([
-        (65.0, 12.0), (73.5, 8.0), (77.5, 8.0), (73.0, 24.0), (68.0, 24.0), (65.0, 20.0), (65.0, 12.0)
+        (65.0, 12.0), (70.0, 7.0), (77.8, 7.0), (77.5, 8.5), (76.5, 10.5),
+        (73.0, 24.0), (68.0, 24.0), (65.0, 20.0), (65.0, 12.0)
     ]),
     "Indian EEZ (East Coast - ICG Regional HQ East / Chennai & Vizag)": Polygon([
         (77.5, 8.0), (88.0, 10.0), (89.5, 21.5), (87.0, 21.5), (79.0, 14.0), (77.5, 8.0)
@@ -128,7 +129,12 @@ if __name__ == "__main__":
     print(f"  Distance to Coast   : {h_dist} m")
     assert h_zone == "High Seas / International Waters", "FAILED Test 3: High seas should resolve correctly"
 
+    # Test 4: MSC Elsa 3 incident location (Lat 9.3125, Lon 76.1360)
+    elsa_zone = find_jurisdiction_zone(9.3125, 76.1360)
+    print(f"\nTest 4 (MSC Elsa 3: 9.3125, 76.1360):")
+    print(f"  Zone                : {elsa_zone}")
+    assert "West Coast" in elsa_zone, "FAILED Test 4: MSC Elsa 3 should resolve to the Indian West Coast EEZ"
+
     print("\n======================================================================")
     print("ALL JURISDICTION SELF-TESTS PASSED (including coastal <500m check)")
     print("======================================================================")
-

@@ -53,10 +53,10 @@ class DriftEstimate:
 def _deg_to_vector(speed: float, direction_deg: float) -> tuple:
     """
     Converts a (speed, direction) pair into (north, east) velocity components.
-    Direction convention matches Open-Meteo: 0deg = North, 90deg = East
-    (meteorological "coming from" convention for wind; "going towards" for
-    currents -- see loader docstring. Both are handled the same way here
-    since we're just decomposing a vector, not interpreting the convention.)
+    Direction convention: 0deg = North, 90deg = East. Callers must provide
+    a direction the vector travels *towards*; Open-Meteo wind directions are
+    converted from their meteorological "from" convention before this helper
+    is called.
     """
     rad = math.radians(direction_deg)
     north = speed * math.cos(rad)
@@ -91,7 +91,10 @@ def simulate_backward_drift(
     detection point, so origin = detection_point - forward_drift).
     """
     current_north, current_east = _deg_to_vector(current_velocity_kmh, current_direction_deg)
-    wind_north, wind_east = _deg_to_vector(wind_speed_kmh * WIND_FACTOR, wind_direction_deg)
+    wind_towards_deg = (wind_direction_deg + 180.0) % 360.0
+    wind_north, wind_east = _deg_to_vector(
+        wind_speed_kmh * WIND_FACTOR, wind_towards_deg
+    )
 
     drift_north_kmh = current_north + wind_north
     drift_east_kmh = current_east + wind_east

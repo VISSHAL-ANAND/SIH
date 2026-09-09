@@ -11,12 +11,16 @@ whether the detector finds anything in it.
 Usage
 -----
     pip install rasterio pyproj numpy --quiet
-    python test_geo_conversion.py
+    python -m tests.test_geo_conversion
 """
 
 import numpy as np
+from pathlib import Path
 
-from ship_detection_module import _pixel_to_latlon, _try_read_geotransform
+from main.ship_detection_module import _pixel_to_latlon, _try_read_geotransform
+
+
+TEST_DIR = Path(__file__).resolve().parent
 
 
 def make_synthetic_geotiff(path: str):
@@ -72,8 +76,9 @@ def make_synthetic_utm_geotiff(path: str):
 
 def main():
     print("=== Test 1: plain lat/lon (EPSG:4326) raster ===")
-    make_synthetic_geotiff("test_synthetic_latlon.tif")
-    transform, crs = _try_read_geotransform("test_synthetic_latlon.tif")
+    latlon_path = TEST_DIR / "test_synthetic_latlon.tif"
+    make_synthetic_geotiff(str(latlon_path))
+    transform, crs = _try_read_geotransform(str(latlon_path))
     if transform is None:
         raise SystemExit("FAILED: geotransform wasn't read at all — check rasterio install.")
 
@@ -93,8 +98,9 @@ def main():
     print("PASSED\n")
 
     print("=== Test 2: projected UTM raster (realistic Sentinel-1 case) ===")
-    make_synthetic_utm_geotiff("test_synthetic_utm.tif")
-    transform, crs = _try_read_geotransform("test_synthetic_utm.tif")
+    utm_path = TEST_DIR / "test_synthetic_utm.tif"
+    make_synthetic_utm_geotiff(str(utm_path))
+    transform, crs = _try_read_geotransform(str(utm_path))
     if transform is None:
         raise SystemExit("FAILED: UTM geotransform wasn't read.")
 

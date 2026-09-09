@@ -15,7 +15,7 @@ Handles two input cases:
 
 Usage as a library
 -------------------
-    from ship_detection_module import detect_hulls
+    from main.ship_detection_module import detect_hulls
 
     detections = detect_hulls("scene.tif")
     # -> [
@@ -30,8 +30,8 @@ Usage as a library
 
 Usage from the command line
 -----------------------------
-    python ship_detection_module.py path/to/scene.tif
-    python ship_detection_module.py path/to/scene.tif --json out.json
+    python -m main.ship_detection_module path/to/scene.tif
+    python -m main.ship_detection_module path/to/scene.tif --json out.json
 """
 
 import argparse

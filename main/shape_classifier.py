@@ -52,6 +52,7 @@ class SlickComponent:
     shape_class: str        # "linear" or "blob"
     aspect_ratio: float     # corroborating signal from oriented bounding box
     orientation_deg: float  # angle of the dominant axis, useful for drift-direction sanity checks
+    spill_area_sq_meters: float = 0.0  # assumes 10 m × 10 m SAR pixels
 
 
 def _pca_elongation(ys: np.ndarray, xs: np.ndarray):
@@ -92,6 +93,7 @@ def classify_slick_shape(binary_mask: np.ndarray) -> list[SlickComponent]:
         ys, xs = np.where(labels == label_id)
         elongation_ratio, orientation = _pca_elongation(ys, xs)
         shape_class = "linear" if elongation_ratio < LINEAR_THRESHOLD else "blob"
+        spill_area_sq_meters = float(area * 100.0)  # 10 m/pixel SAR resolution
 
         x_min = stats[label_id, cv2.CC_STAT_LEFT]
         y_min = stats[label_id, cv2.CC_STAT_TOP]
@@ -114,6 +116,7 @@ def classify_slick_shape(binary_mask: np.ndarray) -> list[SlickComponent]:
             shape_class=shape_class,
             aspect_ratio=round(aspect_ratio, 2),
             orientation_deg=round(orientation, 1),
+            spill_area_sq_meters=spill_area_sq_meters,
         ))
 
     return results

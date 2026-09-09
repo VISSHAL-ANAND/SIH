@@ -41,8 +41,7 @@ this kind of project.
    ```
 3. Run the preprocessing script:
    ```bash
-   cd src
-   python preprocess.py
+   python training\preprocess.py
    ```
    This resizes everything, turns the color masks into class-index masks, and
    splits it into train/val/test as `.npy` files.
@@ -55,8 +54,7 @@ this kind of project.
 ## Step 2 — Train the baseline model
 
 ```bash
-cd src
-python train_unet.py
+python training\train_unet.py
 ```
 
 This isn't training from scratch — it uses a ResNet34 encoder that's already
@@ -96,7 +94,7 @@ box to check — it's what tomorrow's differentiation piece actually runs on.
 
 ## Install this first
 ```bash
-pip install torch torchvision segmentation-models-pytorch opencv-python-headless scipy numpy pillow pandas ultralytics rasterio pyproj
+pip install torch torchvision segmentation-models-pytorch opencv-python-headless scipy numpy pillow pandas ultralytics rasterio pyproj folium
 ```
 
 ## What's done vs. what's left
@@ -104,7 +102,7 @@ pip install torch torchvision segmentation-models-pytorch opencv-python-headless
 | File | Where it stands | Built |
 |---|---|---|
 | `pipeline_contracts.py` | Ready — data contract, now includes real RINOSH + real AIS formats | 2026-08-27 10:56 UTC |
-| `integration_pipeline.py` | Ready — 3 of 4 stages REAL and verified, drift still mocked | 2026-08-27 10:56 UTC |
+| `main\integration_pipeline.py` | Ready — 3 of 4 stages REAL and verified, drift still mocked | 2026-08-27 10:56 UTC |
 
 ## What's real vs. mocked right now
 
@@ -143,7 +141,20 @@ data that doesn't have it.
    for testing (fine for verifying wiring, NOT for the actual pitch).
 4. Run:
 ```bash
-python integration_pipeline.py
+python -m main.integration_pipeline
+```
+
+## Project layout
+
+- `main\` contains the runtime pipeline modules.
+- `training\` contains dataset preparation and model-training scripts.
+- `tests\` contains standalone verification and evaluation scripts.
+- `data\`, `archive\`, and `AIS_CSV_PATH\` contain project data and model inputs.
+
+Run the geolocation test from the repository root:
+
+```bash
+python -m tests.test_geo_conversion
 ```
 
 ## Verified through actual testing, not just written

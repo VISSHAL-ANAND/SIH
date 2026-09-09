@@ -47,6 +47,7 @@ class SlickComponent:
     shape_class: str           # "linear" or "blob"
     aspect_ratio: float
     orientation_deg: float
+    spill_area_sq_meters: float = 0.0  # assumes 10 m × 10 m SAR pixels
 
 
 @dataclass
@@ -77,6 +78,7 @@ class HullDetection:
     # are None; never overwrite a real lat/lon with a demo-anchor guess.
     lat: float | None = None
     lon: float | None = None
+    rf_emission_detected: bool = False
 
 
 @dataclass
@@ -135,6 +137,20 @@ class PipelineOutput:
     hulls: HullDetectionResult | None = None
     ais_matches: AISMatchResult | None = None
     drift: DriftSimResult | None = None
+
+    def to_dict(self) -> dict:
+        """Serialize the final pipeline payload for dashboards and APIs."""
+        return {
+            "image_id": self.image_id,
+            "slicks": [
+                {
+                    "component_id": component.component_id,
+                    "shape_class": component.shape_class,
+                    "spill_area_sq_meters": component.spill_area_sq_meters,
+                }
+                for component in self.slicks.components
+            ],
+        }
 
     def top_suspects(self) -> list[dict]:
         """The actual pitch payload: hulls with no AIS match, ranked by
