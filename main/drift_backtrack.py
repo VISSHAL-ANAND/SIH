@@ -8,7 +8,7 @@ marked as assumptions.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import cos, radians
+from math import cos, radians, sin
 
 
 @dataclass
@@ -59,7 +59,7 @@ def backtrack_spill(
 
     def vector(speed, direction):
         theta = radians(direction)
-        return speed * cos(theta), speed * __import__("math").sin(theta)
+        return speed * cos(theta), speed * sin(theta)
 
     while remaining > 0:
         dt = min(step_minutes, remaining) * 60.0
