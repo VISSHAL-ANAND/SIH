@@ -23,6 +23,7 @@ from .vessel_association import score_vessel_association, association_to_dict
 from .trajectory_evidence import analyze_trajectory, trajectory_to_dict
 from .drift_backtrack import backtrack_spill, drift_to_dict
 from .evidence_fusion import fuse_evidence, fusion_to_dict
+from .incident_package import CandidateVessel, build_incident_package, incident_to_dict
 
 
 def load_rgb_image(path: str | Path) -> np.ndarray:
@@ -192,7 +193,29 @@ def run_real_pipeline(
         "reason": "Current and wind observations are required before estimating a spill origin zone.",
     }
 
+    candidate_objects = [
+        CandidateVessel(
+            mmsi=m.get("matched_mmsi"),
+            vessel_name=m.get("matched_vessel_name"),
+            association=m.get("evidence_fusion") or m.get("association") or {},
+            history=m.get("vessel_history"),
+            trajectory=m.get("trajectory"),
+        )
+        for m in ais_matches
+    ]
+    package = build_incident_package(
+        incident_id=f"IMW-{timestamp.strftime('%Y%m%d-%H%M%S')}",
+        detection={"timestamp": timestamp.isoformat(), "source": "SAR_ANALYSIS"},
+        geolocation={"hulls": georef_hulls},
+        spill={"count": len(components), "components": components},
+        ais={"source_status": ais_source_status, "matches": ais_matches},
+        drift=drift,
+        candidates=candidate_objects,
+        limitations=["RF corroboration is not connected.", "Environmental observations are not yet supplied."],
+    )
+
     return {
+        "incident": incident_to_dict(package),
         "pipeline": {
             "status": "completed",
             "data_integrity": "REAL_ONLY",
