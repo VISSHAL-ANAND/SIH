@@ -21,6 +21,7 @@ from .geolocation import extract_geotiff_coords, compute_image_bounds
 from .vessel_history import analyze_vessel_history, history_to_dict
 from .vessel_association import score_vessel_association, association_to_dict
 from .trajectory_evidence import analyze_trajectory, trajectory_to_dict
+from .drift_backtrack import backtrack_spill, drift_to_dict
 
 
 def load_rgb_image(path: str | Path) -> np.ndarray:
@@ -175,7 +176,7 @@ def run_real_pipeline(
         else:
             ais_source_status = "UNAVAILABLE"
 
-    return {
+    # Drift backtracking waits for authorized current/wind observations; no environmental values are invented.\n    drift = {\n        "status": "AWAITING_ENVIRONMENTAL_DATA",\n        "origin_lat": None, "origin_lon": None, "uncertainty_km": None,\n        "steps": [], "assumptions": [],\n        "reason": "Current and wind observations are required before estimating a spill origin zone.",\n    }\n\n    return {
         "pipeline": {
             "status": "completed",
             "data_integrity": "REAL_ONLY",
@@ -197,6 +198,7 @@ def run_real_pipeline(
             "georeferenced_count": len(georef_hulls),
             "detections": hulls,
         },
+        "drift": drift,
         "ais": {
             "source_status": ais_source_status,
             "matches": ais_matches,
