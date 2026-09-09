@@ -502,3 +502,63 @@ function renderCanonicalIncident(payload) {
 
     setDashboardState('INCIDENT', incident.incident_id || null);
 }
+
+
+// ── Phase 3D: canonical incident map rendering ───────────────────
+const imwMapLayers = {
+    spill: null,
+    origin: null,
+    vessels: new Map(),
+    tracks: new Map(),
+};
+
+function clearIncidentMapLayers() {
+    if (imwMapLayers.spill) { imwMapLayers.spill.remove(); imwMapLayers.spill = null; }
+    if (imwMapLayers.origin) { imwMapLayers.origin.remove(); imwMapLayers.origin = null; }
+    imwMapLayers.vessels.forEach(layer => layer.remove());
+    imwMapLayers.tracks.forEach(layer => layer.remove());
+    imwMapLayers.vessels.clear();
+    imwMapLayers.tracks.clear();
+}
+
+function renderIncidentMap(incident) {
+    if (typeof map === 'undefined' || !incident) return;
+    clearIncidentMapLayers();
+
+    const hulls = incident.geolocation?.hulls || [];
+    const points = [];
+    hulls.forEach(h => {
+        const lat = Number(h.lat), lon = Number(h.lon);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+        points.push([lat, lon]);
+        L.circleMarker([lat, lon], {
+            radius: 8,
+            weight: 2,
+            fillOpacity: 0.35,
+        }).addTo(map);
+    });
+
+    const origin = incident.drift;
+    if (origin && Number.isFinite(Number(origin.origin_lat)) && Number.isFinite(Number(origin.origin_lon))) {
+        imwMapLayers.origin = L.circle([Number(origin.origin_lat), Number(origin.origin_lon)], {
+            radius: Math.max(500, Number(origin.uncertainty_km || 1) * 1000),
+            weight: 2,
+            fillOpacity: 0.08,
+        }).addTo(map);
+        points.push([Number(origin.origin_lat), Number(origin.origin_lon)]);
+    }
+
+    (incident.candidates || []).forEach((candidate, index) => {
+        const history = candidate.history || {};
+        const position = history.last_position || history.position || candidate.position;
+        if (!position) return;
+        const lat = Number(position.lat), lon = Number(position.lon);
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+        const layer = L.marker([lat, lon]).addTo(map);
+        layer.bindPopup('<b>' + (candidate.vessel_name || 'Unknown vessel') + '</b><br>MMSI: ' + (candidate.mmsi || '—'));
+        imwMapLayers.vessels.set(candidate.mmsi || String(index), layer);
+        points.push([lat, lon]);
+    });
+
+    if (points.length > 0) map.fitBounds(L.latLngBounds(points), { padding: [30, 30], maxZoom: 12 });
+}
