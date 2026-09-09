@@ -18,6 +18,7 @@ from .predict_and_classify import load_model, predict_and_classify
 from .ship_detection_module import detect_hulls, _try_extract_timestamp
 from .ais_matcher import load_ais_data, match_all_hulls, assess_ais_coverage, AIS_CSV_PATH
 from .geolocation import extract_geotiff_coords, compute_image_bounds
+from .vessel_history import analyze_vessel_history, history_to_dict
 
 
 def load_rgb_image(path: str | Path) -> np.ndarray:
@@ -144,6 +145,15 @@ def run_real_pipeline(
                     hull_dict["lon"],
                     hull_dict["timestamp"],
                 )
+                history = None
+                if result.has_ais_match and result.matched_mmsi:
+                    history = analyze_vessel_history(
+                        ais_df,
+                        result.matched_mmsi,
+                        hull_dict["lat"],
+                        hull_dict["lon"],
+                        hull_dict["timestamp"],
+                    )
                 ais_matches.append({
                     "hull_id": result.hull_id,
                     "has_ais_match": result.has_ais_match,
@@ -156,6 +166,7 @@ def run_real_pipeline(
                     "coverage_status": coverage.status,
                     "coverage_confidence": coverage.coverage_confidence,
                     "coverage_reason": coverage.reason,
+                    "vessel_history": history_to_dict(history) if history else None,
                 })
         else:
             ais_source_status = "UNAVAILABLE"
