@@ -22,6 +22,7 @@ from .vessel_history import analyze_vessel_history, history_to_dict
 from .vessel_association import score_vessel_association, association_to_dict
 from .trajectory_evidence import analyze_trajectory, trajectory_to_dict
 from .drift_backtrack import backtrack_spill, drift_to_dict
+from .evidence_fusion import fuse_evidence, fusion_to_dict
 
 
 def load_rgb_image(path: str | Path) -> np.ndarray:
@@ -172,6 +173,13 @@ def run_real_pipeline(
                     "vessel_history": history_to_dict(history) if history else None,
                     "association": association_to_dict(score_vessel_association(result.hull_id, result.matched_mmsi, result.matched_vessel_name, result.distance_km, result.time_diff_hours, history.to_dict() if False else (history_to_dict(history) if history else None))),
                     "trajectory": trajectory_to_dict(analyze_trajectory(ais_df, result.matched_mmsi, hull_dict["lat"], hull_dict["lon"], hull_dict["timestamp"])) if result.has_ais_match and result.matched_mmsi else None,
+                    "evidence_fusion": fusion_to_dict(fuse_evidence(
+                        max(0.0, 1.0 - result.distance_km / 10.0) if result.distance_km is not None else None,
+                        max(0.0, 1.0 - result.time_diff_hours / 6.0) if result.time_diff_hours is not None else None,
+                        history.evidence_strength if history else None,
+                        analyze_trajectory(ais_df, result.matched_mmsi, hull_dict["lat"], hull_dict["lon"], hull_dict["timestamp"]).trajectory_score if result.has_ais_match and result.matched_mmsi else None,
+                        None,
+                    )),
                 })
         else:
             ais_source_status = "UNAVAILABLE"
