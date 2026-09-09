@@ -56,11 +56,19 @@ def filter_ais_for_hulls(ais_df, hulls: list[dict], radius_km: float = 25.0,
     if not timestamps:
         return ais_df.iloc[0:0].copy()
 
-    min_time = min(timestamps)
-    max_time = max(timestamps)
-    window = ais_df[
-        (ais_df["timestamp"] >= min_time - np.timedelta64(int(time_hours * 3600), "s"))
-        & (ais_df["timestamp"] <= max_time + np.timedelta64(int(time_hours * 3600), "s"))
+    # AIS CSV timestamps are naive; normalize everything to naive UTC.
+    normalized = ais_df.copy()
+    normalized["timestamp"] = normalized["timestamp"].dt.tz_localize(None)
+    normalized_hulls = [
+        datetime.fromisoformat(ts.replace("Z", "+00:00")).replace(tzinfo=None)
+        if isinstance(ts, str) else ts.replace(tzinfo=None)
+        for ts in timestamps
+    ]
+    min_time = min(normalized_hulls)
+    max_time = max(normalized_hulls)
+    window = normalized[
+        (normalized["timestamp"] >= min_time - np.timedelta64(int(time_hours * 3600), "s"))
+        & (normalized["timestamp"] <= max_time + np.timedelta64(int(time_hours * 3600), "s"))
     ].copy()
 
     if window.empty:
