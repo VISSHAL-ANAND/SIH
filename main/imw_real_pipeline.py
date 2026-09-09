@@ -20,6 +20,7 @@ from .ais_matcher import load_ais_data, match_all_hulls, assess_ais_coverage, AI
 from .geolocation import extract_geotiff_coords, compute_image_bounds
 from .vessel_history import analyze_vessel_history, history_to_dict
 from .vessel_association import score_vessel_association, association_to_dict
+from .trajectory_evidence import analyze_trajectory, trajectory_to_dict
 
 
 def load_rgb_image(path: str | Path) -> np.ndarray:
@@ -169,6 +170,7 @@ def run_real_pipeline(
                     "coverage_reason": coverage.reason,
                     "vessel_history": history_to_dict(history) if history else None,
                     "association": association_to_dict(score_vessel_association(result.hull_id, result.matched_mmsi, result.matched_vessel_name, result.distance_km, result.time_diff_hours, history.to_dict() if False else (history_to_dict(history) if history else None))),
+                    "trajectory": trajectory_to_dict(analyze_trajectory(ais_df, result.matched_mmsi, hull_dict["lat"], hull_dict["lon"], hull_dict["timestamp"])) if result.has_ais_match and result.matched_mmsi else None,
                 })
         else:
             ais_source_status = "UNAVAILABLE"
