@@ -176,7 +176,15 @@ def run_real_pipeline(
         else:
             ais_source_status = "UNAVAILABLE"
 
-    # Drift backtracking waits for authorized current/wind observations; no environmental values are invented.\n    drift = {\n        "status": "AWAITING_ENVIRONMENTAL_DATA",\n        "origin_lat": None, "origin_lon": None, "uncertainty_km": None,\n        "steps": [], "assumptions": [],\n        "reason": "Current and wind observations are required before estimating a spill origin zone.",\n    }\n\n    return {
+    # Drift backtracking waits for authorized current/wind observations; no environmental values are invented.
+    drift = {
+        "status": "AWAITING_ENVIRONMENTAL_DATA",
+        "origin_lat": None, "origin_lon": None, "uncertainty_km": None,
+        "steps": [], "assumptions": [],
+        "reason": "Current and wind observations are required before estimating a spill origin zone.",
+    }
+
+    return {
         "pipeline": {
             "status": "completed",
             "data_integrity": "REAL_ONLY",
