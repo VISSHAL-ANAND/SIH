@@ -134,64 +134,66 @@ async function handleFile(file) {
         const sar = await sarResp.json();
         currentIncident = sar;
 
-        // Populate sidebar — Coordinates
-        $('coord-lat').textContent = sar.coordinates.center_lat.toFixed(4) + '° N';
-        $('coord-lon').textContent = sar.coordinates.center_lon.toFixed(4) + '° E';
-        const bb = sar.coordinates.bbox;
-        $('coord-bbox').textContent =
-            bb[0][0].toFixed(2) + ', ' + bb[0][1].toFixed(2) + '  →  ' +
-            bb[1][0].toFixed(2) + ', ' + bb[1][1].toFixed(2);
+        // The real pipeline returns detected slick components, not synthetic
+        // demo coordinates. Use the first genuinely geolocated slick as the
+        // incident anchor; otherwise stop before any map/AIS claim.
+        const geolocated = (sar.slicks.components || []).find(c => c.geolocation);
+        if (!geolocated) {
+            throw new Error('No georeferenced oil-spill component found. Upload a GeoTIFF or provide coordinates.');
+        }
+        const geo = geolocated.geolocation;
+        sar.coordinates = {
+            center_lat: geo.lat,
+            center_lon: geo.lon,
+            bbox: [[geo.lat, geo.lon], [geo.lat, geo.lon]],
+        };
 
-        // Populate sidebar — Evidence Metrics
-        const areaSqKm = (sar.spill.area_sq_m / 1e6).toFixed(2);
-        $('metric-area').textContent = areaSqKm + ' km²';
-        $('metric-shape').textContent = sar.spill.shape_classification.shape_class.toUpperCase();
-        $('metric-ratio').textContent = sar.spill.shape_classification.eigenvalue_ratio.toFixed(4);
-        $('metric-drift').textContent = sar.drift.drift_distance_km.toFixed(2) + ' km';
-        const orig = sar.drift.origin_coordinates;
-        $('metric-origin').textContent = orig[0].toFixed(4) + '°, ' + orig[1].toFixed(4) + '°';
-        $('ship-confidence').textContent = (sar.hull.confidence * 100).toFixed(0) + '%';
+        $('coord-lat').textContent = geo.lat.toFixed(4) + '° N';
+        $('coord-lon').textContent = geo.lon.toFixed(4) + '° E';
+        $('coord-bbox').textContent = 'Derived from ' + geo.source;
+
+        $('metric-area').textContent = geolocated.area_pixels + ' px';
+        $('metric-shape').textContent = geolocated.shape_class.toUpperCase();
+        $('metric-ratio').textContent = Number(geolocated.eigenvalue_ratio).toFixed(4);
+        $('metric-drift').textContent = 'NOT RUN';
+        $('metric-origin').textContent = 'NOT RUN';
+        const firstHull = (sar.hulls.detections || []).find(h => h.lat !== null && h.lon !== null);
+        $('ship-confidence').textContent = firstHull ? (firstHull.confidence * 100).toFixed(0) + '%' : '—';
 
         activateSections('section-coords', 'section-evidence');
-
-        // Render map — spill bounding box
         renderSpillOnMap(sar);
 
-        // ---- Stage 2: Analyze Traffic ----
-        const trafficResp = await fetch('/api/analyze-traffic', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                slick_lat: sar.coordinates.center_lat,
-                slick_lon: sar.coordinates.center_lon,
-                hull_lat: sar.hull.coordinates[0],
-                hull_lon: sar.hull.coordinates[1],
-            }),
-        });
+        // AIS is only queried when a georeferenced hull exists. Never
+        // manufacture a vessel/RF result when the data is unavailable.
+        if (firstHull) {
+            sar.hull = { coordinates: [firstHull.lat, firstHull.lon], confidence: firstHull.confidence };
+            const trafficResp = await fetch('/api/analyze-traffic', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    slick_lat: geo.lat,
+                    slick_lon: geo.lon,
+                    hull_lat: firstHull.lat,
+                    hull_lon: firstHull.lon,
+                    capture_time: firstHull.timestamp,
+                }),
+            });
+            if (!trafficResp.ok) throw new Error('Traffic analysis failed');
+            const traffic = await trafficResp.json();
+            currentTraffic = traffic;
+            populateAISPanel(traffic);
+            populateShipCard(traffic);
+            activateSections('section-ais', 'section-ship');
+            renderTrafficOnMap(traffic, sar);
+            btnDispatch.disabled = false;
+        } else {
+            currentTraffic = null;
+            btnDispatch.disabled = true;
+            showToast('SAR analyzed; no georeferenced hull available for AIS correlation.', 'info');
+        }
 
-        if (!trafficResp.ok) throw new Error('Traffic analysis failed');
-        const traffic = await trafficResp.json();
-        currentTraffic = traffic;
-
-        // Populate sidebar — AIS / RF
-        populateAISPanel(traffic);
-        populateShipCard(traffic);
-        activateSections('section-ais', 'section-ship');
-
-        // Render map — AIS track, blackout, RF lock, surrounding traffic
-        renderTrafficOnMap(traffic, sar);
-
-        // Enable dispatch
-        btnDispatch.disabled = false;
-
-        // Fly to incident
-        map.flyTo(
-            [sar.coordinates.center_lat, sar.coordinates.center_lon],
-            11,
-            { duration: 1.8 }
-        );
-
-        showToast('Pipeline complete — ' + sar.incident_id, 'success');
+        map.flyTo([geo.lat, geo.lon], 11, { duration: 1.8 });
+        showToast('Real SAR pipeline complete — ' + sar.incident_id, 'success');
 
     } catch (err) {
         console.error(err);
