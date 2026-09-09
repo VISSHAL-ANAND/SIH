@@ -106,6 +106,7 @@ uploadInput.addEventListener('change', () => {
 
 // ── File Handler — Orchestrates Full Pipeline ───────────────────────
 async function handleFile(file) {
+    setDashboardState('ANALYZING');
     // Reset state
     clearAllLayers();
     currentIncident = null;
@@ -193,12 +194,14 @@ async function handleFile(file) {
         }
 
         map.flyTo([geo.lat, geo.lon], 11, { duration: 1.8 });
-        showToast('Real SAR pipeline complete — ' + sar.incident_id, 'success');
+        setDashboardState('INCIDENT', sar.incident_id || sar.incident?.incident_id || null);
+        showToast('Real SAR pipeline complete — ' + (sar.incident_id || sar.incident?.incident_id || 'incident'), 'success');
 
     } catch (err) {
         console.error(err);
         showToast('Error: ' + err.message, 'error', 5000);
     } finally {
+        if (!currentIncident) setDashboardState('READY');
         // Reset upload zone
         overlay.classList.remove('visible');
         uploadZone.classList.remove('processing');
