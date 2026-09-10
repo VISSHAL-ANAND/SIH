@@ -7,7 +7,7 @@ dark-vessel AIS/RF attribution, and operator-reviewed response/report drafts.
 Endpoints:
   POST /api/process-sar       — SAR image upload + real pipeline
   POST /api/analyze-traffic   — real AIS correlation metadata
-  POST /api/analyze-drift     — environmental source-zone backtrack
+  POST /api/analyze-drift     — operator-supplied environmental drift analysis
   POST /api/prepare-response  — operator-reviewed Coast Guard response draft
   POST /api/build-report      — deterministic incident evidence report
   POST /api/analyze-incident  — Legacy single-call pipeline (retained)
@@ -160,8 +160,13 @@ async def analyze_traffic(request: AnalyzeTrafficRequest) -> Dict[str, Any]:
 
 @app.post("/api/analyze-drift")
 async def analyze_drift(request: DriftAnalysisRequest) -> Dict[str, Any]:
-    """Enrich a canonical incident with estimated environmental source-zone evidence."""
+    """Attach transparent environmental drift evidence to an incident.
+
+    Environmental observations must be supplied by the caller. The endpoint
+    never fabricates currents, winds, source coordinates, or vessel attribution.
+    """
     from main.drift_analysis import enrich_incident_with_drift
+
     try:
         return enrich_incident_with_drift(
             request.incident,
@@ -169,8 +174,8 @@ async def analyze_drift(request: DriftAnalysisRequest) -> Dict[str, Any]:
             windage=request.windage,
             uncertainty_km=request.uncertainty_km,
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid drift input: {exc}")
 
 
 @app.post("/api/prepare-response")
