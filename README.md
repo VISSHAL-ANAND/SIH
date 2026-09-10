@@ -22,6 +22,8 @@ Real U-Net slick inference
         |
         +--> real AIS correlation
         |        |
+        |        +--> GFW AIS presence when authorized + recent
+        |        +--> documented MarineCadastre replay fallback
         |        +--> candidate vessels
         |        +--> AIS coverage / gap state
         |        +--> vessel history + trajectory evidence
@@ -75,26 +77,41 @@ pip install -r requirements.txt
 
 ### 2. Provide trained model weights
 
-The canonical pipeline expects:
+The canonical pipeline expects these files by default:
 
 ```text
 data/processed/best_unet.pt
 runs/detect/sar_hull_detector/weights/best_unet.pt
 ```
 
-These are model inputs, not generated demo data. If a required checkpoint is absent, IMW should report the dependency failure rather than silently substituting another model.
+Large model binaries are intentionally excluded from Git. Override the paths without editing code:
 
-### 3. Provide real AIS data when available
+```text
+IMW_SLICK_CHECKPOINT=<path-to-trained-slick-checkpoint>
+IMW_HULL_CHECKPOINT=<path-to-trained-hull-checkpoint>
+```
 
-`main/ais_matcher.py` currently points to:
+If a required checkpoint is absent, IMW reports the dependency failure instead of silently substituting another model.
+
+### 3. Configure AIS
+
+For a documented historical replay, place a MarineCadastre-style AIS file at:
 
 ```text
 AIS_CSV_PATH/ais-2025-01-01
 ```
 
-The matcher expects MarineCadastre-style columns such as `mmsi`, `base_date_time`, `longitude`, `latitude`, `sog`, `cog`, `heading`, and vessel metadata.
+The matcher expects columns such as `mmsi`, `base_date_time`, `longitude`, `latitude`, `vessel_name`, and related vessel metadata.
 
-**Geographic limitation:** the current MarineCadastre sample is not an Indian-water feed. It is suitable for matcher validation, but it should not be presented as live Indian-water AIS during the SIH pitch. Global Fishing Watch integration remains a future provider task until valid API access is available.
+For **current/recent Indian-water coverage**, IMW now supports an opt-in Global Fishing Watch AIS-presence adapter. Configure a personal GFW API token as an environment variable:
+
+```text
+GFW_API_ACCESS_TOKEN=<your-token>
+```
+
+The provider uses GFW's `public-global-presence:latest` dataset through the 4Wings report API, queries a small polygon around the detected SAR hulls, and converts real hourly presence records into IMW's internal AIS schema. GFW API access is authenticated and permission-controlled; a 401/403 is surfaced explicitly. The current GFW AIS-presence dataset is available only to approximately 96 hours before the present, so older SAR replay scenes continue to use the documented local AIS source when available.
+
+**Geographic limitation:** the MarineCadastre replay sample is not an Indian-water feed and must not be presented as live Indian-water AIS. For the SIH live/recent walkthrough, use an authorized GFW token and document the exact source/date.
 
 ### 4. Start the API
 
@@ -104,10 +121,19 @@ uvicorn app:app --host 0.0.0.0 --port 8000
 
 Open the dashboard at `http://localhost:8000`.
 
+Useful diagnostic endpoint:
+
+```text
+GET /api/health
+```
+
+It reports checkpoint availability, AIS-source availability, environmental-provider status, and RF implementation state without running model inference.
+
 ## API surface
 
 | Endpoint | Purpose |
 |---|---|
+| `GET /api/health` | Read-only deployment/dependency diagnostics |
 | `POST /api/process-sar` | Canonical SAR → slick → hull → AIS → evidence pipeline |
 | `POST /api/analyze-traffic` | Correlate a supplied hull location with configured AIS |
 | `POST /api/analyze-drift` | Analyse operator-supplied environmental observations |
@@ -117,7 +143,7 @@ Open the dashboard at `http://localhost:8000`.
 
 ## Environmental evidence
 
-The live environmental adapter uses Open-Meteo's Marine API for ocean-current information and the Forecast/Historical Forecast API for wind observations. Historical SAR timestamps are routed to the historical forecast service when they are old enough that current forecast data is inappropriate.
+The live environmental adapter uses Open-Meteo's Marine API for ocean-current information and the Forecast/Historical Forecast API for wind observations. Historical SAR timestamps are routed to the historical forecast service when current forecast data is inappropriate.
 
 The drift calculation uses the configured windage factor (default `0.03`) and records its assumptions and uncertainty. It is intentionally presented as evidence for investigation, not as proof of where a discharge legally originated.
 
@@ -126,6 +152,7 @@ The drift calculation uses the configured windage factor (default `0.03`) and re
 The CI workflow runs the deterministic IMW contract suite covering:
 
 - API surface and integrity markers
+- health/dependency diagnostics
 - SAR/investigation contract
 - geolocation
 - AIS candidate discovery
@@ -134,10 +161,11 @@ The CI workflow runs the deterministic IMW contract suite covering:
 - trajectory evidence
 - drift analysis
 - environmental-provider conversions and historical routing
+- Global Fishing Watch AIS-provider parsing and permission handling
 - incident package/report/response contracts
 - RF corroboration state
 
-Run the same suite locally with:
+Run the contract suite locally with:
 
 ```bash
 python -m pytest \
@@ -152,7 +180,8 @@ python -m pytest \
   tests/test_incident_response.py \
   tests/test_incident_report.py \
   tests/test_prepare_response_contract.py \
-  tests/test_environmental_provider.py -q
+  tests/test_environmental_provider.py \
+  tests/test_gfw_ais_provider.py -q
 ```
 
 Some tests intentionally use deterministic fixtures or monkeypatching to verify contracts without fabricating production sensor evidence.
@@ -166,7 +195,8 @@ main/
   predict_and_classify.py      U-Net inference
   shape_classifier.py          Explainable slick geometry classifier
   ship_detection_module.py     YOLO hull detection + geolocation
-  ais_matcher.py               Real AIS loading/matching
+  ais_matcher.py               Local real AIS loading/matching
+  gfw_ais_provider.py          Optional Global Fishing Watch AIS adapter
   ais_candidates.py            Multi-vessel candidate discovery
   candidate_ranking.py         Transparent evidence ranking
   vessel_history.py            AIS continuity/gap analysis
@@ -177,11 +207,11 @@ main/
   drift_analysis.py            Backward source-zone estimate
   rf_corroboration.py          RF provider status boundary
   incident_package.py          Canonical incident schema
-  incident_report.py           Report builder
+  incident_report.py            Report builder
   incident_response.py         Operator-reviewed response draft
   ...                          Supporting pipeline modules
 static/                        IMW dashboard
-training/                      Dataset preparation and model training
+t​raining/                      Dataset preparation and model training
 tests/                         Contract and component tests
 .github/workflows/              CI
 ```
@@ -196,6 +226,14 @@ The strongest software contribution is the chain from **independent SAR physical
 
 ## Release gate
 
-Before a public SIH demo, check the latest GitHub Actions run for `main`, then validate one real georeferenced Sentinel-1 scene with the actual trained checkpoints and the exact AIS source/date used in the walkthrough.
+Before a public SIH demo:
+
+1. Confirm the latest GitHub Actions run for `main` is green.
+2. Confirm both trained checkpoints are present locally or configured through environment variables.
+3. Validate one real georeferenced Sentinel-1 scene end-to-end.
+4. For a recent live walkthrough, use an authorized GFW token and record the exact AIS dataset/date used.
+5. For historical replay, use the documented AIS file and label it as replay data.
+6. Verify the incident map, evidence matrix, vessel investigation, report export, and Coast Guard draft workflow.
+7. Keep `RESPONSIBILITY_STATUS=NOT_ESTABLISHED` unless independent evidence supports a stronger conclusion.
 
 **Final repository verification:** the canonical contract suite must remain green after every release change.
