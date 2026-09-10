@@ -1,13 +1,14 @@
-// Phase 5D — canonical incident integration and report export.
+// Phase 5E — canonical incident/UI/report synchronization.
 (function () {
   let latestReport = null;
-
   window.imwIntegration = {
     sync(incident) {
       if (!incident) return;
+      window.imwCanonicalIncident = incident;
       if (window.renderInvestigationGates) window.renderInvestigationGates(incident);
       if (window.renderIncidentTimeline) window.renderIncidentTimeline(incident);
-      const candidates = incident.candidates || [];
+      if (window.renderAISInvestigationWindow && incident.ais) window.renderAISInvestigationWindow(incident.ais);
+      const candidates = Array.isArray(incident.candidates) ? incident.candidates : [];
       const first = candidates[0];
       if (first && window.renderEvidenceMatrix) window.renderEvidenceMatrix(first);
       if (first && window.openVesselInvestigation) window.openVesselInvestigation(first);
@@ -17,14 +18,13 @@
         window.renderIncidentResponse(draft);
       }
     },
-    setReport(report) { latestReport = report; },
+    setReport(report) { latestReport = report; window.imwLatestIncidentReport = report; },
     getReport() { return latestReport; },
     exportReport() {
       if (!latestReport) return {ok:false, reason:'NO_REPORT'};
       return window.exportIMWIncidentReport ? window.exportIMWIncidentReport(latestReport) : {ok:false, reason:'EXPORT_MODULE_UNAVAILABLE'};
     }
   };
-
   const nativeFetch = window.fetch.bind(window);
   window.fetch = async function (...args) {
     const response = await nativeFetch(...args);
@@ -40,12 +40,11 @@
     } catch (_) {}
     return response;
   };
-
   document.addEventListener('DOMContentLoaded', () => {
     const button = document.getElementById('export-incident-report');
     if (!button) return;
     button.addEventListener('click', async () => {
-      const incident = window.currentIncident?.incident || window.currentIncident || null;
+      const incident = window.imwCanonicalIncident || null;
       if (!incident?.incident_id) {
         window.showToast?.('No canonical incident available to export.', 'warning');
         return;
