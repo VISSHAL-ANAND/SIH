@@ -4,7 +4,7 @@
 
 ## Executive status
 
-The repository now has one canonical application entry point: `app.py`. The previous duplicate FastAPI applications and simulated/mock API adapters have been removed from the active branch.
+The repository has one canonical application entry point: `app.py`. Duplicate FastAPI applications and simulated/mock API adapters have been removed from the active branch.
 
 The current system is an investigation-oriented pipeline, not an automatic attribution or dispatch system.
 
@@ -16,7 +16,7 @@ SAR image / GeoTIFF
     -> explainable slick geometry classification
     -> YOLO physical-hull detection
     -> WGS84 geolocation when real raster metadata exists
-    -> real AIS correlation / coverage assessment
+    -> GFW AIS presence when authorized/recent OR documented AIS replay
     -> candidate ranking + vessel history + trajectory evidence
     -> environmental current/wind evidence
     -> backward drift source-zone estimate
@@ -46,6 +46,7 @@ SAR image / GeoTIFF
 | GeoTIFF geolocation | READY | Pixel-centre coordinates transformed to WGS84 |
 | Plain-image geolocation | READY WITH LIMITATION | Requires explicit operator centre; marked estimated |
 | AIS matcher | READY | Spatial + temporal matching against configured real records |
+| GFW AIS provider | IMPLEMENTED / CREDENTIAL-GATED | Uses real `public-global-presence:latest` when `GFW_API_ACCESS_TOKEN` is configured and the scene is recent enough |
 | AIS candidate ranking | READY | Transparent spatial/temporal/continuity/trajectory scoring |
 | Vessel history | READY | Explicit continuity and gap states |
 | Environmental provider | READY | Current/wind vectors + historical replay routing |
@@ -54,24 +55,43 @@ SAR image / GeoTIFF
 | Incident report | READY | Deterministic report from canonical incident package |
 | Coast Guard response | READY AS DRAFT | Operator confirmation required; no automatic transmission |
 | Dashboard | READY FOR DEMO | Static dashboard wired to canonical incident state |
-| CI contract suite | CONFIGURED | GitHub Actions runs the selected IMW contracts |
+| CI contract suite | RUNNING | Includes GFW provider contract coverage; release status depends on latest run |
 
-## AIS limitation
+## AIS sources
 
-The checked-in MarineCadastre sample is real data but is not an Indian-water feed. It can validate matcher behaviour at scale, but it must not be presented as live Indian AIS coverage during the SIH pitch.
+### GFW current/recent mode
 
-Global Fishing Watch remains a future provider integration until valid API access is available. The code must keep reporting unavailable coverage rather than substituting synthetic positions.
+Set:
+
+```text
+GFW_API_ACCESS_TOKEN=<authorized-personal-token>
+```
+
+The provider queries the GFW 4Wings AIS vessel-presence dataset around the detected SAR hulls and converts the returned real hourly presence records into IMW's AIS schema. Authentication and dataset-permission failures remain explicit.
+
+GFW's current AIS presence product is only available to approximately 96 hours before the present, so it is intended for a current/recent walkthrough rather than old SAR replay.
+
+### Historical replay mode
+
+The checked-in MarineCadastre sample is real data but is not an Indian-water feed. It is suitable for validating the matcher and investigation logic at scale, but must not be presented as live Indian AIS during the SIH pitch.
 
 ## Runtime prerequisites
 
-Required model files:
+Required model files by default:
 
 ```text
 data/processed/best_unet.pt
 runs/detect/sar_hull_detector/weights/best_unet.pt
 ```
 
-Real AIS data, when used, is expected at the configured `AIS_CSV_PATH` location in `main/ais_matcher.py`.
+The paths can be overridden with:
+
+```text
+IMW_SLICK_CHECKPOINT
+IMW_HULL_CHECKPOINT
+```
+
+Large model binaries remain excluded from Git.
 
 ## Repository cleanup completed
 
@@ -88,12 +108,11 @@ Removed from the active branch:
 - generated legacy MSC Elsa evidence artifacts
 - development file dump
 
-The remaining `main/` modules are supporting components for the canonical pipeline or explicit validation/contract code.
-
 ## Next engineering priorities
 
-1. Validate the current CI run and fix any dependency/runtime issues it exposes.
-2. Test one real georeferenced Sentinel-1 scene end-to-end with the trained checkpoints.
-3. Secure an appropriate Indian/global AIS source for the pitch, without fabricating coverage.
-4. Curate the final SIH demonstration scenario and evidence trail.
-5. Keep all attribution language at the level of evidence/candidate ranking until independently confirmed by an operator.
+1. Confirm the latest CI run is green.
+2. Upload/provide the actual trained checkpoints and one real georeferenced Sentinel-1 scene for end-to-end validation.
+3. Obtain/verify an authorized GFW API token for a recent Indian-water walkthrough.
+4. Validate the complete SAR → AIS → environment → map → report → response workflow.
+5. Curate the final SIH demonstration scenario and evidence trail.
+6. Keep all attribution language at the level of evidence/candidate ranking until independently confirmed by an operator.
