@@ -11,6 +11,7 @@ from dataclasses import dataclass
 @dataclass
 class RankedCandidate:
     rank: int
+    hull_id: int | None
     mmsi: str | None
     vessel_name: str | None
     priority_score: float
@@ -70,6 +71,7 @@ def rank_candidates(candidates: list[dict]) -> list[RankedCandidate]:
         confidence = "HIGH" if total_weight >= 0.75 else ("MEDIUM" if total_weight >= 0.50 else "LOW")
         ranked.append(RankedCandidate(
             rank=0,
+            hull_id=c.get("hull_id"),
             mmsi=c.get("matched_mmsi"),
             vessel_name=c.get("matched_vessel_name"),
             priority_score=round(score, 3),
@@ -94,6 +96,7 @@ def ranked_to_dict(items: list[RankedCandidate]) -> list[dict]:
     return [
         {
             "rank": x.rank,
+            "hull_id": x.hull_id,
             "mmsi": x.mmsi,
             "vessel_name": x.vessel_name,
             "priority_score": x.priority_score,
