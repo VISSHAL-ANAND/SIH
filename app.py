@@ -2,17 +2,21 @@
 Indo Marine Watch (IMW) — Maritime Intelligence Backend
 =======================================================
 Government-grade FastAPI service for automated oil-spill SAR processing,
-dark-vessel AIS/RF attribution, and operator-reviewed Coast Guard response.
+dark-vessel AIS/RF attribution, and operator-reviewed response/report drafts.
+
+Endpoints:
+  POST /api/process-sar       — SAR image upload + real pipeline
+  POST /api/analyze-traffic   — real AIS correlation metadata
+  POST /api/prepare-response  — operator-reviewed Coast Guard response draft
+  POST /api/build-report      — deterministic incident evidence report
+  POST /api/analyze-incident  — Legacy single-call pipeline (retained)
 """
 
 import sys
 import time
 import uuid
-import hashlib
-import hmac as hmac_mod
-import json
 from pathlib import Path
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form
@@ -32,25 +36,23 @@ if str(MAIN_DIR) not in sys.path:
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-from models import run_sar_segmentation, run_hull_detection, classify_slick_pca_shape
+from models import run_sar_segmentation, run_hull_detection
 from physics import fetch_open_meteo_environment, simulate_backward_drift_trajectory
-from sensor_fusion import correlate_hull_with_ais, haversine_km, MOCK_AIS_BROADCASTS
+from sensor_fusion import correlate_hull_with_ais
 from main.imw_real_pipeline import run_real_pipeline
+from main.incident_report import build_incident_report
 
 app = FastAPI(
     title="Indo Marine Watch (IMW)",
     description="Government Maritime Intelligence — Oil Spill Detection & Dark Vessel Attribution",
-    version="4.1.0",
+    version="5.0.0",
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=["*"], allow_credentials=True,
+    allow_methods=["*"], allow_headers=["*"],
 )
-
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
@@ -77,6 +79,11 @@ class PrepareResponseRequest(BaseModel):
     recipient: Optional[str] = None
 
 
+class BuildReportRequest(BaseModel):
+    incident: Dict[str, Any]
+    response_draft: Optional[Dict[str, Any]] = None
+
+
 @app.post("/api/process-sar")
 async def process_sar(
     file: UploadFile = File(...),
@@ -90,12 +97,11 @@ async def process_sar(
     file_path.write_bytes(await file.read())
     try:
         result = run_real_pipeline(file_path, center_lat=center_lat, center_lon=center_lon, use_ais=True)
-        result["pipeline_latency_ms"] = round((time.perf_counter() - t_start) * 1000, 2)
-        incident = result.get("incident") or {}
-        incident_id = incident.get("incident_id") or f"IMW-{uuid.uuid4().hex[:8].upper()}-2026"
+        incident_id = result.get("incident", {}).get("incident_id") or f"IMW-{uuid.uuid4().hex[:8].upper()}-2026"
         result["incident_id"] = incident_id
-        if isinstance(incident, dict):
-            incident["incident_id"] = incident_id
+        if isinstance(result.get("incident"), dict):
+            result["incident"]["incident_id"] = incident_id
+        result["pipeline_latency_ms"] = round((time.perf_counter() - t_start) * 1000, 2)
         return {"status": "success", **result}
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
@@ -112,64 +118,35 @@ async def process_sar(
 
 @app.post("/api/analyze-traffic")
 async def analyze_traffic(request: AnalyzeTrafficRequest) -> Dict[str, Any]:
-    """Return only real AIS correlation metadata; RF/track reconstruction is not fabricated."""
+    """Return only real AIS correlation metadata; RF is never fabricated."""
     from main.ais_matcher import AIS_CSV_PATH, load_ais_data, assess_ais_coverage, match_hull_to_ais
-
     ais_path = Path(AIS_CSV_PATH)
     if not ais_path.exists():
-        return {
-            "status": "success",
-            "data_integrity": "REAL_ONLY",
-            "ais_status": "NO_AIS_COVERAGE",
-            "is_dark_vessel": False,
-            "rf_intercept": {"status": "NOT_IMPLEMENTED"},
-            "ais_track": [],
-            "surrounding_traffic": [],
-            "attribution_reason": "Configured AIS source is unavailable; no vessel attribution is made.",
-        }
+        return {"status": "success", "data_integrity": "REAL_ONLY", "ais_status": "NO_AIS_COVERAGE", "is_dark_vessel": False,
+                "rf_intercept": {"status": "NOT_IMPLEMENTED"}, "ais_track": [], "surrounding_traffic": [],
+                "attribution_reason": "Configured AIS source is unavailable; no vessel attribution is made."}
 
     ais_df = load_ais_data(str(ais_path))
-    capture_time = (
-        datetime.fromisoformat(request.capture_time.replace("Z", "+00:00")).replace(tzinfo=None)
-        if request.capture_time
-        else datetime.now(timezone.utc).replace(tzinfo=None)
-    )
+    capture_time = (datetime.fromisoformat(request.capture_time.replace("Z", "+00:00")).replace(tzinfo=None)
+                    if request.capture_time else datetime.now(timezone.utc).replace(tzinfo=None))
     coverage = assess_ais_coverage(ais_df, request.hull_lat, request.hull_lon, capture_time)
     match = match_hull_to_ais(request.hull_lat, request.hull_lon, capture_time, ais_df, hull_id=0)
     status = "AIS_MATCHED" if match.has_ais_match else coverage.status
-
     return {
-        "status": "success",
-        "data_integrity": "REAL_ONLY",
-        "ais_status": status,
+        "status": "success", "data_integrity": "REAL_ONLY", "ais_status": status,
         "is_dark_vessel": bool(status == "AIS_GAP"),
-        "suspect_vessel": {
-            "name": match.matched_vessel_name or "UNIDENTIFIED",
-            "mmsi": match.matched_mmsi or "---",
-            "flag": "UNKNOWN",
-            "type": "AIS-correlated vessel" if match.has_ais_match else "Unresolved SAR hull",
-            "coordinates": [request.hull_lat, request.hull_lon],
-            "threat_score": match.suspicion_score,
-        },
+        "suspect_vessel": {"name": match.matched_vessel_name or "UNIDENTIFIED", "mmsi": match.matched_mmsi or "---",
+                           "flag": "UNKNOWN", "type": "AIS-correlated vessel" if match.has_ais_match else "Unresolved SAR hull",
+                           "coordinates": [request.hull_lat, request.hull_lon], "threat_score": match.suspicion_score},
         "rf_intercept": {"status": "NOT_IMPLEMENTED", "match": False, "signature": None, "lock_coordinates": None},
-        "ais_track": [],
-        "ais_blackout_point": None,
-        "surrounding_traffic": [],
+        "ais_track": [], "ais_blackout_point": None, "surrounding_traffic": [],
         "attribution_reason": coverage.reason if not match.has_ais_match else match.reason,
-        "ais_match": {
-            "matched_mmsi": match.matched_mmsi,
-            "matched_vessel_name": match.matched_vessel_name,
-            "distance_km": match.distance_km,
-            "time_diff_hours": match.time_diff_hours,
-            "suspicion_score": match.suspicion_score,
-        },
-        "coverage": {
-            "status": coverage.status,
-            "records_in_time_window": coverage.records_in_time_window,
-            "nearby_records": coverage.nearby_records,
-            "confidence": coverage.coverage_confidence,
-            "reason": coverage.reason,
-        },
+        "ais_match": {"matched_mmsi": match.matched_mmsi, "matched_vessel_name": match.matched_vessel_name,
+                      "distance_km": match.distance_km, "time_diff_hours": match.time_diff_hours,
+                      "suspicion_score": match.suspicion_score},
+        "coverage": {"status": coverage.status, "records_in_time_window": coverage.records_in_time_window,
+                     "nearby_records": coverage.nearby_records, "confidence": coverage.coverage_confidence,
+                     "reason": coverage.reason},
     }
 
 
@@ -179,69 +156,49 @@ async def prepare_response(request: PrepareResponseRequest) -> Dict[str, Any]:
     timestamp = datetime.now(timezone.utc).isoformat()
     response_id = f"IMW-RESPONSE-{uuid.uuid4().hex[:8].upper()}"
     return {
-        "status": "DRAFT_REQUIRES_OPERATOR_CONFIRMATION",
-        "response_id": response_id,
-        "timestamp": timestamp,
-        "recipient": request.recipient or "Indian Coast Guard — operator to confirm",
-        "incident_id": request.incident_id,
+        "status": "DRAFT_REQUIRES_OPERATOR_CONFIRMATION", "response_id": response_id, "timestamp": timestamp,
+        "recipient": request.recipient or "Indian Coast Guard — operator to confirm", "incident_id": request.incident_id,
         "urgency": "HIGH" if request.threat_score >= 0.8 else "REVIEW",
-        "payload_preview": {
-            "incident_id": request.incident_id,
-            "slick_centroid": request.slick_centroid,
-            "spill_area_sq_m": request.spill_area_sq_m,
-            "candidate_vessel": request.suspect_vessel,
-            "threat_score": request.threat_score,
-            "evidence_summary": request.evidence_summary,
-        },
-        "operator_confirmation": {
-            "required": True,
-            "confirmed": False,
-            "confirmed_by": None,
-            "confirmed_at": None,
-        },
+        "payload_preview": {"incident_id": request.incident_id, "slick_centroid": request.slick_centroid,
+                            "spill_area_sq_m": request.spill_area_sq_m, "candidate_vessel": request.suspect_vessel,
+                            "threat_score": request.threat_score, "evidence_summary": request.evidence_summary},
+        "operator_confirmation": {"required": True, "confirmed": False, "confirmed_by": None, "confirmed_at": None},
         "transmission": {"status": "NOT_SENT", "sent_at": None},
         "notice": "Draft only. Verify evidence and recipient details before any official transmission.",
     }
 
 
+@app.post("/api/build-report")
+async def build_report(request: BuildReportRequest) -> Dict[str, Any]:
+    """Build the exportable report from the same canonical incident evidence package."""
+    if not request.incident.get("incident_id"):
+        raise HTTPException(status_code=422, detail="incident.incident_id is required")
+    return build_incident_report(request.incident, request.response_draft)
+
+
 @app.post("/api/analyze-incident")
 async def analyze_incident(request: AnalyzeIncidentRequest) -> Dict[str, Any]:
-    """Original single-call pipeline retained for backward compatibility."""
+    """Legacy single-call pipeline retained for backward compatibility."""
     t_start = time.perf_counter()
     slick_lat, slick_lon = 9.3764, 75.9758
     kerala_env_lat, kerala_env_lon = 9.3500, 76.0800
     sar_res = run_sar_segmentation(pixel_count=1000)
     hull_res = run_hull_detection(slick_lat=slick_lat, slick_lon=slick_lon)
     env_params = fetch_open_meteo_environment(lat=kerala_env_lat, lon=kerala_env_lon)
-    drift_res = simulate_backward_drift_trajectory(
-        slick_lat=slick_lat, slick_lon=slick_lon,
-        hours_back=request.hours_back, env_params=env_params,
-    )
+    drift_res = simulate_backward_drift_trajectory(slick_lat=slick_lat, slick_lon=slick_lon, hours_back=request.hours_back, env_params=env_params)
     hull_lat, hull_lon = hull_res["coordinates"]
     fusion_res = correlate_hull_with_ais(hull_lat=hull_lat, hull_lon=hull_lon, tolerance_km=5.0)
-    t_end = time.perf_counter()
     incident_id = f"INCIDENT-{request.scenario.upper().replace('_', '-')}-2026"
-    return {
-        "status": "success",
-        "incident_id": incident_id,
-        "pipeline_latency_ms": round((t_end - t_start) * 1000, 2),
-        "target_vessel_coordinates": fusion_res["target_vessel_coordinates"],
-        "slick_centroid": [slick_lat, slick_lon],
-        "origin_coordinates": drift_res["origin_coordinates"],
-        "drift_distance_km": drift_res["drift_distance_km"],
-        "hours_back": request.hours_back,
-        "spill_area_sq_m": sar_res["spill_area_sq_m"],
-        "shape_classification": sar_res["shape_classification"],
-        "sensor_fusion": {
-            "ais_status": fusion_res["ais_status"],
-            "is_dark_vessel": fusion_res["is_dark_vessel"],
-            "rf_intercept_match": fusion_res["rf_intercept_match"],
-            "rf_signature": fusion_res["rf_signature"],
-            "threat_score": fusion_res["threat_score"],
-            "attribution_reason": fusion_res["attribution_reason"],
-        },
-        "environment": env_params,
-    }
+    return {"status": "success", "incident_id": incident_id,
+            "pipeline_latency_ms": round((time.perf_counter() - t_start) * 1000, 2),
+            "target_vessel_coordinates": fusion_res["target_vessel_coordinates"], "slick_centroid": [slick_lat, slick_lon],
+            "origin_coordinates": drift_res["origin_coordinates"], "drift_distance_km": drift_res["drift_distance_km"],
+            "hours_back": request.hours_back, "spill_area_sq_m": sar_res["spill_area_sq_m"],
+            "shape_classification": sar_res["shape_classification"],
+            "sensor_fusion": {"ais_status": fusion_res["ais_status"], "is_dark_vessel": fusion_res["is_dark_vessel"],
+                              "rf_intercept_match": fusion_res["rf_intercept_match"], "rf_signature": fusion_res["rf_signature"],
+                              "threat_score": fusion_res["threat_score"], "attribution_reason": fusion_res["attribution_reason"]},
+            "environment": env_params}
 
 
 @app.get("/")
