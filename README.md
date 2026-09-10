@@ -193,3 +193,7 @@ IMW currently does **not** claim that an AIS gap proves a dark vessel intentiona
 ## SIH pitch focus
 
 The strongest software contribution is the chain from **independent SAR physical-hull evidence → time/space AIS correlation → vessel-history/trajectory analysis → environmental corroboration → auditable incident package → operator-reviewed response**. The system is designed to make each evidence source inspectable instead of collapsing uncertain signals into a fabricated certainty score.
+
+## Release gate
+
+Before a public SIH demo, check the latest GitHub Actions run for `main`, then validate one real georeferenced Sentinel-1 scene with the actual trained checkpoints and the exact AIS source/date used in the walkthrough.
