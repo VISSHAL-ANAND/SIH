@@ -13,6 +13,7 @@ Endpoints:
   POST /api/analyze-incident  — Legacy single-call pipeline (retained)
 """
 
+import json
 import sys
 import time
 import uuid
@@ -92,19 +93,45 @@ class BuildReportRequest(BaseModel):
     response_draft: Optional[Dict[str, Any]] = None
 
 
+def _parse_environmental_observations(raw: Optional[str]) -> List[Dict[str, Any]]:
+    """Parse caller-supplied environmental evidence without inventing values."""
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=422, detail=f"environmental_observations_json must be valid JSON: {exc.msg}")
+    if not isinstance(value, list) or any(not isinstance(item, dict) for item in value):
+        raise HTTPException(status_code=422, detail="environmental_observations_json must be a JSON list of objects")
+    return value
+
+
 @app.post("/api/process-sar")
 async def process_sar(
     file: UploadFile = File(...),
     center_lat: Optional[float] = Form(None),
     center_lon: Optional[float] = Form(None),
+    environmental_observations_json: Optional[str] = Form(None),
 ):
-    """Canonical IMW SAR endpoint using the real-only pipeline."""
+    """Canonical IMW SAR endpoint using the real-only pipeline.
+
+    Environmental observations are optional caller-supplied evidence. When
+    omitted, the pipeline reports drift evidence as NOT_AVAILABLE rather than
+    fabricating environmental conditions.
+    """
     t_start = time.perf_counter()
     safe_name = Path(file.filename or "upload.png").name
     file_path = TEMP_DIR / f"{uuid.uuid4().hex[:8]}_{safe_name}"
     file_path.write_bytes(await file.read())
+    observations = _parse_environmental_observations(environmental_observations_json)
     try:
-        result = run_real_pipeline(file_path, center_lat=center_lat, center_lon=center_lon, use_ais=True)
+        result = run_real_pipeline(
+            file_path,
+            center_lat=center_lat,
+            center_lon=center_lon,
+            use_ais=True,
+            environmental_observations=observations,
+        )
         incident_id = result.get("incident", {}).get("incident_id") or f"IMW-{uuid.uuid4().hex[:8].upper()}-2026"
         result["incident_id"] = incident_id
         if isinstance(result.get("incident"), dict):
@@ -115,6 +142,8 @@ async def process_sar(
         raise HTTPException(status_code=404, detail=str(exc))
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"IMW real pipeline unavailable: {exc}")
     finally:
