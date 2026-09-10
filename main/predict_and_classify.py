@@ -1,16 +1,13 @@
 """
 SIH26143 - Slick Detection: End-to-end inference (U-Net -> shape classifier)
-Owner: VISSHAL
 
-Run this once data/processed/best_unet.pt exists (from RINOSH's GPU run).
-Loads the trained model, runs it on the held-out test images, and passes
-each predicted mask through the linear-vs-blob shape classifier.
-
-This is also your "package slick detection as pipeline module" deliverable --
-SIMI's integration task (wiring all 4 modules together) can call
-`predict_and_classify(image)` directly rather than reaching into U-Net
-internals.
+The production checkpoint is configurable through IMW_SLICK_CHECKPOINT so the
+same code can run locally, in CI, or in a deployed environment without
+committing large model binaries to Git.
 """
+
+import os
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -18,18 +15,28 @@ import segmentation_models_pytorch as smp
 
 from .shape_classifier import classify_slick_shape, components_to_dicts
 
-CHECKPOINT_PATH = str(__import__("pathlib").Path(__file__).resolve().parent.parent / "data" / "processed" / "best_unet.pt")
+DEFAULT_CHECKPOINT_PATH = Path(__file__).resolve().parent.parent / "data" / "processed" / "best_unet.pt"
+CHECKPOINT_PATH = os.getenv("IMW_SLICK_CHECKPOINT", str(DEFAULT_CHECKPOINT_PATH))
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def load_model():
+    checkpoint = Path(CHECKPOINT_PATH)
+    if not checkpoint.exists():
+        raise FileNotFoundError(
+            f"Trained slick-segmentation checkpoint not found: {checkpoint}. "
+            "Set IMW_SLICK_CHECKPOINT or provide the expected checkpoint."
+        )
     model = smp.Unet(
         encoder_name="resnet34",
-        encoder_weights=None,   # we're loading trained weights, not ImageNet ones
+        encoder_weights=None,
         in_channels=3,
         classes=2,
     )
-    model.load_state_dict(torch.load(CHECKPOINT_PATH, map_location=DEVICE))
+    state = torch.load(checkpoint, map_location=DEVICE)
+    if isinstance(state, dict) and "state_dict" in state:
+        state = state["state_dict"]
+    model.load_state_dict(state)
     model.to(DEVICE)
     model.eval()
     return model
@@ -64,7 +71,7 @@ def main():
     model = load_model()
 
     test_images = np.load("data/processed/test_images.npy")
-    test_masks = np.load("data/processed/test_masks.npy")  # ground truth, for comparison
+    test_masks = np.load("data/processed/test_masks.npy")
     print(f"Running inference on {len(test_images)} held-out test images...\n")
 
     linear_count, blob_count = 0, 0
@@ -82,9 +89,6 @@ def main():
                       f"| centroid=({comp['centroid_x']:.0f},{comp['centroid_y']:.0f})")
 
     print(f"\nTotals across test set: {linear_count} linear slicks, {blob_count} blob slicks")
-    print("\nLinear detections are your leads for RINOSH/ASHMIL's hull-matching --")
-    print("pass their centroid coordinates + this image's timestamp/geolocation to")
-    print("the AIS matcher to check for a nearby vessel with no matching AIS ping.")
 
 
 if __name__ == "__main__":
