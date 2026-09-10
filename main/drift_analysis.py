@@ -150,3 +150,37 @@ def drift_to_dict(result: DriftResult) -> dict:
         "assumptions": result.assumptions,
         "reason": result.reason,
     }
+
+
+def enrich_incident_with_drift(
+    incident: dict,
+    observations: Iterable[dict] | None,
+    *,
+    windage: float = 0.03,
+    uncertainty_km: float = 2.0,
+) -> dict:
+    """Return an incident copy with drift evidence attached.
+
+    The incident is expected to contain ``spill.components`` with a
+    geolocation object. No candidate vessel is promoted from this operation.
+    """
+    enriched = dict(incident)
+    spill = incident.get("spill") or {}
+    components = spill.get("components") or []
+    location = next((c.get("geolocation") for c in components if c.get("geolocation")), None)
+    detection = incident.get("detection") or {}
+    result = estimate_source_zone(
+        location.get("lat") if location else None,
+        location.get("lon") if location else None,
+        detection.get("timestamp"),
+        observations,
+        windage=windage,
+        uncertainty_km=uncertainty_km,
+    )
+    enriched["drift"] = drift_to_dict(result)
+    enriched["environmental"] = {
+        "status": "AVAILABLE" if observations else "NOT_AVAILABLE",
+        "observation_count": len(list(observations)) if observations else 0,
+        "reason": result.reason,
+    }
+    return enriched
