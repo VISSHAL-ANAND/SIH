@@ -9,6 +9,7 @@
         const ais = incident?.ais || {};
         const rf = incident?.rf || {};
         const drift = incident?.drift || {};
+        const driftStatus = String(drift.status || "").toUpperCase();
         const gates = [
             ["SAR DETECTED", Boolean(incident?.spill), "SAR_ANALYSIS"],
             ["LOCATION AVAILABLE", Boolean((incident?.geolocation?.hulls || []).length), "GEOLOCATION"],
@@ -16,7 +17,7 @@
             ["DARK-VESSEL REVIEW", (incident?.candidates || []).some(c =>
                 ["UNRESOLVED", "WEAK_CANDIDATE"].includes(c?.association?.classification)
             ), "EVIDENCE_REVIEW"],
-            ["DRIFT ANALYSIS", drift.status === "COMPLETED", "DRIFT"],
+            ["DRIFT ANALYSIS", ["ESTIMATED", "COMPLETED"].includes(driftStatus), "DRIFT"],
             ["RF CORROBORATION", rf.status === "CORROBORATED", "RF"],
         ];
 
