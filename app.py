@@ -1,80 +1,25 @@
 """
-Indo Marine Watch (IMW) — Maritime Intelligence Backend
-=======================================================
-Government-grade FastAPI service for automated oil-spill SAR processing,
-dark-vessel AIS/RF attribution, and Indian Coast Guard evidence dispatch.
+Indo Marine Watch (IMW) — FastAPI backend.
 
-Endpoints:
-  POST /api/process-sar       — SAR image upload + 4-stage pipeline
-  POST /api/analyze-traffic   — AIS correlation, track history, RF lock
-  POST /api/prepare-response  — operator-reviewed Coast Guard response draft
-  POST /api/analyze-incident  — Legacy single-call pipeline (retained)
+The API exposes the real-only SAR investigation pipeline and a reviewable
+Coast Guard response draft. External authority transmission is never automatic.
 """
+from __future__ import annotations
 
-import sys
 import time
 import uuid
-import hashlib
-import hmac as hmac_mod
-import json
+from datetime import datetime, timezone
 from pathlib import Path
-from datetime import datetime, timezone, timedelta
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel
 
-# ---------------------------------------------------------------------------
-# PATH SETUP
-# ---------------------------------------------------------------------------
-BASE_DIR = Path(__file__).resolve().parent
-MAIN_DIR = BASE_DIR / "main"
-TEMP_DIR = BASE_DIR / "temp"
-STATIC_DIR = BASE_DIR / "static"
-TEMP_DIR.mkdir(exist_ok=True)
-
-if str(MAIN_DIR) not in sys.path:
-    sys.path.insert(0, str(MAIN_DIR))
-if str(BASE_DIR) not in sys.path:
-    sys.path.insert(0, str(BASE_DIR))
-
-# Core engine imports
-from models import run_sar_segmentation, run_hull_detection, classify_slick_pca_shape
-from physics import fetch_open_meteo_environment, simulate_backward_drift_trajectory
-from sensor_fusion import correlate_hull_with_ais, haversine_km, MOCK_AIS_BROADCASTS
 from main.imw_real_pipeline import run_real_pipeline
 
-# ---------------------------------------------------------------------------
-# APP INIT
-# ---------------------------------------------------------------------------
-app = FastAPI(
-    title="Indo Marine Watch (IMW)",
-    description="Government Maritime Intelligence — Oil Spill Detection & Dark Vessel Attribution",
-    version="4.0.0",
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Serve frontend assets
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
-
-# ---------------------------------------------------------------------------
-# PYDANTIC SCHEMAS
-# ---------------------------------------------------------------------------
-
-class AnalyzeIncidentRequest(BaseModel):
-    scenario: str = Field(default="msc_elsa_3")
-    hours_back: float = Field(default=6.0, ge=0.5, le=24.0)
+app = FastAPI(title="Indo Marine Watch", version="4.1.0")
+TEMP_DIR = Path("/tmp/imw")
+TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
 
 class AnalyzeTrafficRequest(BaseModel):
@@ -87,17 +32,18 @@ class AnalyzeTrafficRequest(BaseModel):
 
 class PrepareResponseRequest(BaseModel):
     incident_id: str
-    slick_centroid: List[float]
-    spill_area_sq_m: float
-    suspect_vessel: Dict[str, Any]
-    threat_score: float
-    evidence_summary: Optional[str] = None
+    slick_centroid: list[Optional[float]]
+    spill_area_sq_m: float = 0
+    suspect_vessel: Dict[str, Any] = {}
+    threat_score: float = 0
+    evidence_summary: str = ""
     recipient: Optional[str] = None
 
 
-# ---------------------------------------------------------------------------
-# ENDPOINT 1 — SAR IMAGE PROCESSING (NEW)
-# ---------------------------------------------------------------------------
+@app.get("/api/health")
+async def health() -> Dict[str, Any]:
+    return {"status": "ok", "service": "IMW", "data_integrity": "REAL_ONLY"}
+
 
 @app.post("/api/process-sar")
 async def process_sar(
@@ -113,7 +59,12 @@ async def process_sar(
     try:
         result = run_real_pipeline(file_path, center_lat=center_lat, center_lon=center_lon, use_ais=True)
         result["pipeline_latency_ms"] = round((time.perf_counter() - t_start) * 1000, 2)
-        result["incident_id"] = f"IMW-{uuid.uuid4().hex[:8].upper()}-2026"
+        incident = result.get("incident") or {}
+        # Keep the API envelope and canonical incident package on the same ID.
+        incident_id = incident.get("incident_id") or f"IMW-{uuid.uuid4().hex[:8].upper()}-2026"
+        result["incident_id"] = incident_id
+        if isinstance(incident, dict):
+            incident["incident_id"] = incident_id
         return {"status": "success", **result}
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
@@ -127,10 +78,6 @@ async def process_sar(
         except OSError:
             pass
 
-
-# ---------------------------------------------------------------------------
-# ENDPOINT 2 — AIS / RF TRAFFIC ANALYSIS (NEW)
-# ---------------------------------------------------------------------------
 
 @app.post("/api/analyze-traffic")
 async def analyze_traffic(request: AnalyzeTrafficRequest) -> Dict[str, Any]:
@@ -156,12 +103,8 @@ async def analyze_traffic(request: AnalyzeTrafficRequest) -> Dict[str, Any]:
         if request.capture_time
         else datetime.now(timezone.utc).replace(tzinfo=None)
     )
-    coverage = assess_ais_coverage(
-        ais_df, request.hull_lat, request.hull_lon, capture_time
-    )
-    match = match_hull_to_ais(
-        request.hull_lat, request.hull_lon, capture_time, ais_df, hull_id=0
-    )
+    coverage = assess_ais_coverage(ais_df, request.hull_lat, request.hull_lon, capture_time)
+    match = match_hull_to_ais(request.hull_lat, request.hull_lon, capture_time, ais_df, hull_id=0)
 
     status = "AIS_MATCHED" if match.has_ais_match else coverage.status
     return {
@@ -177,12 +120,7 @@ async def analyze_traffic(request: AnalyzeTrafficRequest) -> Dict[str, Any]:
             "coordinates": [request.hull_lat, request.hull_lon],
             "threat_score": match.suspicion_score,
         },
-        "rf_intercept": {
-            "status": "NOT_IMPLEMENTED",
-            "match": False,
-            "signature": None,
-            "lock_coordinates": None,
-        },
+        "rf_intercept": {"status": "NOT_IMPLEMENTED", "match": False, "signature": None, "lock_coordinates": None},
         "ais_track": [],
         "ais_blackout_point": None,
         "surrounding_traffic": [],
@@ -204,10 +142,6 @@ async def analyze_traffic(request: AnalyzeTrafficRequest) -> Dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------------------
-# ENDPOINT 3 — COAST GUARD RESPONSE DRAFT
-# ---------------------------------------------------------------------------
-
 @app.post("/api/prepare-response")
 async def prepare_response(request: PrepareResponseRequest) -> Dict[str, Any]:
     """Create a reviewable response draft; never transmit automatically."""
@@ -228,82 +162,7 @@ async def prepare_response(request: PrepareResponseRequest) -> Dict[str, Any]:
             "threat_score": request.threat_score,
             "evidence_summary": request.evidence_summary,
         },
-        "operator_confirmation": {
-            "required": True,
-            "confirmed": False,
-            "confirmed_by": None,
-            "confirmed_at": None,
-        },
-        "transmission": {
-            "status": "NOT_SENT",
-            "sent_at": None,
-        },
-        "notice": "Draft only. Verify evidence and recipient details before any official transmission.",
+        "operator_confirmation": {"required": True, "confirmed": False},
+        "transmission": "NOT_SENT",
+        "notice": "Draft only. No external authority has been contacted.",
     }
-
-
-# LEGACY ENDPOINT — SINGLE-CALL PIPELINE (RETAINED)
-# ---------------------------------------------------------------------------
-
-@app.post("/api/analyze-incident")
-async def analyze_incident(request: AnalyzeIncidentRequest) -> Dict[str, Any]:
-    """
-    Original single-call 4-stage pipeline. Retained for backward
-    compatibility with existing tests.
-    """
-    t_start = time.perf_counter()
-
-    slick_lat, slick_lon = 9.3764, 75.9758
-    kerala_env_lat, kerala_env_lon = 9.3500, 76.0800
-
-    sar_res = run_sar_segmentation(pixel_count=1000)
-    hull_res = run_hull_detection(slick_lat=slick_lat, slick_lon=slick_lon)
-    env_params = fetch_open_meteo_environment(lat=kerala_env_lat, lon=kerala_env_lon)
-    drift_res = simulate_backward_drift_trajectory(
-        slick_lat=slick_lat,
-        slick_lon=slick_lon,
-        hours_back=request.hours_back,
-        env_params=env_params,
-    )
-
-    hull_lat, hull_lon = hull_res["coordinates"]
-    fusion_res = correlate_hull_with_ais(hull_lat=hull_lat, hull_lon=hull_lon, tolerance_km=5.0)
-
-    t_end = time.perf_counter()
-    incident_id = f"INCIDENT-{request.scenario.upper().replace('_', '-')}-2026"
-
-    return {
-        "status": "success",
-        "incident_id": incident_id,
-        "pipeline_latency_ms": round((t_end - t_start) * 1000, 2),
-        "target_vessel_coordinates": fusion_res["target_vessel_coordinates"],
-        "slick_centroid": [slick_lat, slick_lon],
-        "origin_coordinates": drift_res["origin_coordinates"],
-        "drift_distance_km": drift_res["drift_distance_km"],
-        "hours_back": request.hours_back,
-        "spill_area_sq_m": sar_res["spill_area_sq_m"],
-        "shape_classification": sar_res["shape_classification"],
-        "sensor_fusion": {
-            "ais_status": fusion_res["ais_status"],
-            "is_dark_vessel": fusion_res["is_dark_vessel"],
-            "rf_intercept_match": fusion_res["rf_intercept_match"],
-            "rf_signature": fusion_res["rf_signature"],
-            "threat_score": fusion_res["threat_score"],
-            "attribution_reason": fusion_res["attribution_reason"],
-        },
-        "environment": env_params,
-    }
-
-
-# ---------------------------------------------------------------------------
-# ROOT
-# ---------------------------------------------------------------------------
-
-@app.get("/")
-async def root():
-    return FileResponse(str(STATIC_DIR / "index.html"))
-
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
