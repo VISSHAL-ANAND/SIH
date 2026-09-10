@@ -39,12 +39,7 @@ def score_vessel_association(
     history: dict | None,
     coverage_status: str | None = None,
 ) -> VesselAssociation:
-    """Score observed evidence; never converts proximity into responsibility.
-
-    ``overall_score`` is an evidence-confidence score, not a probability of
-    guilt or responsibility. A vessel can only be classified as a candidate;
-    this function never emits a responsible/culpable classification.
-    """
+    """Score observed evidence; never converts proximity into responsibility."""
     distance_score = 0.0 if distance_km is None else exp(-max(distance_km, 0.0) / 3.0)
     time_score = 0.0 if time_diff_hours is None else exp(-max(time_diff_hours, 0.0) / 1.0)
     continuity_score = float(history.get("evidence_strength", 0.0)) if history else 0.0
@@ -55,12 +50,14 @@ def score_vessel_association(
     gap_status = "NOT_ESTABLISHED"
     if history:
         hstatus = history.get("status", "UNKNOWN")
-        if hstatus == "POST_EVENT_GAP_UNRESOLVED" and coverage == "LOCAL_AIS_ACTIVITY":
-            gap_status = "POTENTIAL_GAP_REQUIRES_REVIEW"
-        elif hstatus == "CONTINUITY_OBSERVED":
+        if hstatus == "CONTINUITY_OBSERVED":
             gap_status = "NO_GAP_OBSERVED"
+        elif hstatus in {"POST_EVENT_GAP_UNRESOLVED", "OBSERVED_GAP_REQUIRES_REVIEW", "LONG_OBSERVED_GAP_REQUIRES_REVIEW"}:
+            gap_status = "POTENTIAL_GAP_REQUIRES_REVIEW" if coverage == "LOCAL_AIS_ACTIVITY" else "GAP_OBSERVED_REQUIRES_REVIEW"
         elif hstatus in {"NO_VESSEL_HISTORY", "NO_HISTORY_AROUND_EVENT"}:
             gap_status = "NOT_ASSESSABLE"
+        elif hstatus == "PRE_EVENT_HISTORY_ONLY":
+            gap_status = "POST_EVENT_HISTORY_MISSING"
 
     evidence = []
     if distance_km is not None:
