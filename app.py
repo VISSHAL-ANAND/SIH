@@ -43,6 +43,8 @@ from physics import fetch_open_meteo_environment, simulate_backward_drift_trajec
 from sensor_fusion import correlate_hull_with_ais
 from main.imw_real_pipeline import run_real_pipeline
 from main.incident_report import build_incident_report
+from main.drift_analysis import enrich_incident_with_drift, drift_to_dict, estimate_source_zone
+from main.environmental_provider import OpenMeteoEnvironmentalProvider
 
 app = FastAPI(
     title="Indo Marine Watch (IMW)",
@@ -106,18 +108,75 @@ def _parse_environmental_observations(raw: Optional[str]) -> List[Dict[str, Any]
     return value
 
 
+def _incident_spill_anchor(incident: Dict[str, Any]) -> tuple[float | None, float | None, str | None]:
+    spill = incident.get("spill") or {}
+    components = spill.get("components") or []
+    location = next((c.get("geolocation") for c in components if c.get("geolocation")), None)
+    detection = incident.get("detection") or {}
+    return (
+        location.get("lat") if location else None,
+        location.get("lon") if location else None,
+        detection.get("timestamp"),
+    )
+
+
+def _attach_live_environment(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Fetch real environmental observations and attach them to the canonical incident."""
+    incident = result.get("incident")
+    if not isinstance(incident, dict):
+        return result
+    lat, lon, timestamp = _incident_spill_anchor(incident)
+    if lat is None or lon is None or not timestamp:
+        result["environmental"] = {
+            "status": "NOT_AVAILABLE",
+            "provider": "Open-Meteo Marine + Forecast API",
+            "observation_count": 0,
+            "reason": "A real georeferenced spill location and detection timestamp are required before environmental retrieval.",
+        }
+        return result
+
+    try:
+        detection_time = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+        rows = OpenMeteoEnvironmentalProvider().get_observations(lat, lon, detection_time, window_hours=3)
+        enriched = enrich_incident_with_drift(incident, rows)
+        result["incident"] = enriched
+        result["drift"] = enriched.get("drift")
+        result["environmental"] = {
+            **(enriched.get("environmental") or {}),
+            "provider": "Open-Meteo Marine + Forecast API",
+            "source_status": "REAL_MODELLED_DATA",
+            "observation_count": len(rows),
+        }
+        return result
+    except Exception as exc:
+        # Network/provider failure is an unavailable-data state, never a synthetic fallback.
+        result["drift"] = drift_to_dict(estimate_source_zone(lat, lon, timestamp, []))
+        result["environmental"] = {
+            "status": "UNAVAILABLE",
+            "provider": "Open-Meteo Marine + Forecast API",
+            "source_status": "PROVIDER_ERROR",
+            "observation_count": 0,
+            "reason": f"Environmental provider unavailable: {type(exc).__name__}: {exc}",
+        }
+        if isinstance(result.get("incident"), dict):
+            result["incident"]["drift"] = result["drift"]
+            result["incident"]["environmental"] = result["environmental"]
+        return result
+
+
 @app.post("/api/process-sar")
 async def process_sar(
     file: UploadFile = File(...),
     center_lat: Optional[float] = Form(None),
     center_lon: Optional[float] = Form(None),
     environmental_observations_json: Optional[str] = Form(None),
+    use_live_environment: bool = Form(True),
 ):
     """Canonical IMW SAR endpoint using the real-only pipeline.
 
-    Environmental observations are optional caller-supplied evidence. When
-    omitted, the pipeline reports drift evidence as NOT_AVAILABLE rather than
-    fabricating environmental conditions.
+    By default the endpoint attempts live environmental retrieval from Open-Meteo
+    after SAR geolocation. A provider failure becomes UNAVAILABLE; no synthetic
+    current/wind values are ever substituted.
     """
     t_start = time.perf_counter()
     safe_name = Path(file.filename or "upload.png").name
@@ -132,6 +191,8 @@ async def process_sar(
             use_ais=True,
             environmental_observations=observations,
         )
+        if not observations and use_live_environment:
+            result = _attach_live_environment(result)
         incident_id = result.get("incident", {}).get("incident_id") or f"IMW-{uuid.uuid4().hex[:8].upper()}-2026"
         result["incident_id"] = incident_id
         if isinstance(result.get("incident"), dict):
@@ -194,8 +255,6 @@ async def analyze_drift(request: DriftAnalysisRequest) -> Dict[str, Any]:
     Environmental observations must be supplied by the caller. The endpoint
     never fabricates currents, winds, source coordinates, or vessel attribution.
     """
-    from main.drift_analysis import enrich_incident_with_drift
-
     try:
         return enrich_incident_with_drift(
             request.incident,
