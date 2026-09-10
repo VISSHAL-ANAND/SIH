@@ -26,6 +26,7 @@ class CandidateVessel:
     association: dict[str, Any]
     history: dict[str, Any] | None = None
     trajectory: dict[str, Any] | None = None
+    ranking: dict[str, Any] | None = None
 
 
 @dataclass
