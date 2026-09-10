@@ -3,6 +3,7 @@ name: IMW tests
 on:
   push:
     branches:
+      - "main"
       - "phase-2/imw-real-pipeline"
       - "phase-2/imw-drift-evidence"
       - "phase-2/imw-live-environment-final"
@@ -19,8 +20,7 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          pip install pytest
+          pip install -r requirements.txt
       - name: Run IMW contract suite
         run: >-
           python -m pytest
