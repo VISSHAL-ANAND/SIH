@@ -197,3 +197,5 @@ The strongest software contribution is the chain from **independent SAR physical
 ## Release gate
 
 Before a public SIH demo, check the latest GitHub Actions run for `main`, then validate one real georeferenced Sentinel-1 scene with the actual trained checkpoints and the exact AIS source/date used in the walkthrough.
+
+**Final repository verification:** the canonical contract suite must remain green after every release change.
