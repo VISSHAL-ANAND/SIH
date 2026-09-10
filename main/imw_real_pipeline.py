@@ -1,6 +1,7 @@
-"""IMW Phase 2 real SAR/AIS investigation pipeline."""
+"""IMW real SAR/AIS investigation pipeline."""
 from __future__ import annotations
 
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ from .predict_and_classify import load_model, predict_and_classify, predict_mask
 from .ship_detection_module import detect_hulls, _try_extract_timestamp
 from .ais_matcher import load_ais_data, match_all_hulls, assess_ais_coverage, AIS_CSV_PATH
 from .ais_candidates import find_ais_candidates
+from .gfw_ais_provider import GFWAPIError, GFWAISProvider
 from .geolocation import extract_geotiff_coords, pixel_to_latlon
 from .vessel_history import analyze_vessel_history, history_to_dict
 from .vessel_association import score_vessel_association, association_to_dict
@@ -164,6 +166,27 @@ def _enrich_ranked_candidate(rank_item: dict | None, candidate: dict) -> dict:
     return enriched
 
 
+def _load_ais_source(georef_hulls: list[dict], detection_time: datetime):
+    """Choose GFW for current authorized access, else the documented local replay source."""
+    if not georef_hulls:
+        return None, "NO_GEOREFERENCED_HULLS", None
+
+    gfw_token = os.getenv("GFW_API_ACCESS_TOKEN")
+    gfw_error = None
+    if gfw_token:
+        try:
+            gfw_df = GFWAISProvider(gfw_token).get_presence(georef_hulls, detection_time, window_hours=2.0)
+            return gfw_df, "REAL_GFW_AIS_PRESENCE", None
+        except GFWAPIError as exc:
+            gfw_error = str(exc)
+
+    if Path(AIS_CSV_PATH).exists():
+        fallback_status = "REAL_MARINECADASTRE_REPLAY" if not gfw_error else "REAL_MARINECADASTRE_FALLBACK"
+        return load_ais_data(AIS_CSV_PATH), fallback_status, gfw_error
+
+    return None, "UNAVAILABLE", gfw_error
+
+
 def run_real_pipeline(image_path: str | Path, center_lat: float | None = None, center_lon: float | None = None, use_ais: bool = True, environmental_observations: list[dict] | None = None, windage: float = 0.03, drift_uncertainty_km: float = 2.0) -> dict[str, Any]:
     path = Path(image_path)
     if not path.exists():
@@ -183,12 +206,11 @@ def run_real_pipeline(image_path: str | Path, center_lat: float | None = None, c
     ais_matches, ranked_candidates = [], []
     vessel_graph = {"status": "NO_AIS_CANDIDATES", "nodes": [], "edges": []}
     ais_source_status = "NOT_REQUESTED"
+    ais_source_detail = None
+
     if use_ais:
-        if not georef_hulls:
-            ais_source_status = "NO_GEOREFERENCED_HULLS"
-        elif Path(AIS_CSV_PATH).exists():
-            ais_source_status = "REAL_MARINECADASTRE"
-            ais_df = load_ais_data(AIS_CSV_PATH)
+        ais_df, ais_source_status, ais_source_detail = _load_ais_source(georef_hulls, detection_time)
+        if ais_df is not None:
             relevant = filter_ais_for_hulls(ais_df, georef_hulls, time_hours=6.0)
             all_candidates = []
             for idx, hull in enumerate(georef_hulls):
@@ -208,8 +230,6 @@ def run_real_pipeline(image_path: str | Path, center_lat: float | None = None, c
             ranked_candidates = [_enrich_ranked_candidate(ranking_by_key.get((c.get("hull_id"), c.get("matched_mmsi"))), c) for c in all_candidates]
             ais_matches = ranked_candidates
             vessel_graph = build_spill_vessel_graph(ranked_candidates)
-        else:
-            ais_source_status = "UNAVAILABLE"
 
     primary_location = next((c.get("geolocation") for c in components if c.get("geolocation")), None)
     drift_result = estimate_source_zone(primary_location.get("lat") if primary_location else None, primary_location.get("lon") if primary_location else None, timestamp, environmental_observations, windage=windage, uncertainty_km=drift_uncertainty_km)
@@ -218,7 +238,7 @@ def run_real_pipeline(image_path: str | Path, center_lat: float | None = None, c
 
     candidate_objects = [CandidateVessel(mmsi=m["matched_mmsi"], vessel_name=m.get("matched_vessel_name"), association=m.get("association") or {}, history=m.get("vessel_history"), trajectory=m.get("trajectory"), ranking=m.get("ranking")) for m in ais_matches if m.get("matched_mmsi")]
     rf_result = corroborate_rf([], 0.0, 0.0)
-    package = build_incident_package(incident_id=build_incident_id(detection_time), detection={"timestamp": timestamp, "source": "SAR_ANALYSIS"}, geolocation={"hulls": georef_hulls}, spill={"count": len(components), "components": components, "inference_mode": inference_mode}, ais={"source_status": ais_source_status, "matches": ais_matches, "candidates": ranked_candidates, "vessel_graph": vessel_graph}, environmental=environmental, drift=drift, rf=rf_result, candidates=candidate_objects)
+    package = build_incident_package(incident_id=build_incident_id(detection_time), detection={"timestamp": timestamp, "source": "SAR_ANALYSIS"}, geolocation={"hulls": georef_hulls}, spill={"count": len(components), "components": components, "inference_mode": inference_mode}, ais={"source_status": ais_source_status, "source_detail": ais_source_detail, "matches": ais_matches, "candidates": ranked_candidates, "vessel_graph": vessel_graph}, environmental=environmental, drift=drift, rf=rf_result, candidates=candidate_objects)
     incident = incident_to_dict(package)
     incident["responsibility_status"] = "NOT_ESTABLISHED"
-    return {"status": "success", "data_integrity": "REAL_ONLY", "inference_mode": inference_mode, "components": components, "hulls": georef_hulls, "ais_source_status": ais_source_status, "ais_matches": ais_matches, "ranked_candidates": ranked_candidates, "vessel_graph": vessel_graph, "environmental": environmental, "drift": drift, "rf_corroboration": rf_result, "incident": incident}
+    return {"status": "success", "data_integrity": "REAL_ONLY", "inference_mode": inference_mode, "components": components, "hulls": georef_hulls, "ais_source_status": ais_source_status, "ais_source_detail": ais_source_detail, "ais_matches": ais_matches, "ranked_candidates": ranked_candidates, "vessel_graph": vessel_graph, "environmental": environmental, "drift": drift, "rf_corroboration": rf_result, "incident": incident}
