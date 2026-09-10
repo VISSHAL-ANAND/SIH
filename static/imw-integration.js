@@ -43,6 +43,7 @@
       if (window.renderIncidentTimeline) window.renderIncidentTimeline(incident);
       if (window.renderAISInvestigationWindow && incident.ais) window.renderAISInvestigationWindow(incident.ais);
       renderEnvironmentalDrift(incident);
+      if (window.renderIncidentMap) window.renderIncidentMap(incident);
       const candidates = Array.isArray(incident.candidates) ? incident.candidates : [];
       const first = candidates[0];
       if (first && window.renderEvidenceMatrix) window.renderEvidenceMatrix(first);
