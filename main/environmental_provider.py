@@ -1,9 +1,10 @@
 """Environmental providers for auditable IMW drift evidence.
 
 The live provider uses Open-Meteo's Marine API for ocean currents and its
-Forecast API for 10 m wind. It returns observations in the component format
-expected by ``main.drift_analysis``. Network failure is reported to the caller;
-no synthetic fallback values are generated.
+Forecast API (or Historical Forecast API for older SAR timestamps) for 10 m
+wind. It returns observations in the component format expected by
+``main.drift_analysis``. Network failure is reported to the caller; no
+synthetic fallback values are generated.
 """
 from __future__ import annotations
 
@@ -16,6 +17,7 @@ import requests
 
 MARINE_API_URL = "https://marine-api.open-meteo.com/v1/marine"
 FORECAST_API_URL = "https://api.open-meteo.com/v1/forecast"
+HISTORICAL_FORECAST_API_URL = "https://historical-forecast-api.open-meteo.com/v1/forecast"
 
 
 @dataclass
@@ -52,9 +54,11 @@ class OpenMeteoEnvironmentalProvider(EnvironmentalProvider):
     """Fetch real ocean-current and wind observations around a target time."""
 
     source_name = "Open-Meteo Marine + Forecast API"
+    historical_source_name = "Open-Meteo Marine + Historical Forecast API"
 
-    def __init__(self, timeout_seconds: float = 12.0):
+    def __init__(self, timeout_seconds: float = 12.0, historical_after_days: int = 10):
         self.timeout_seconds = timeout_seconds
+        self.historical_after_days = historical_after_days
 
     @staticmethod
     def _utc(value: datetime) -> datetime:
@@ -67,6 +71,12 @@ class OpenMeteoEnvironmentalProvider(EnvironmentalProvider):
         direction = math.radians(float(direction_deg))
         sign = -1.0 if coming_from else 1.0
         return sign * speed_mps * math.sin(direction), sign * speed_mps * math.cos(direction)
+
+    def _wind_url(self, target: datetime) -> tuple[str, str]:
+        age = datetime.now(timezone.utc) - target
+        if age > timedelta(days=self.historical_after_days):
+            return HISTORICAL_FORECAST_API_URL, self.historical_source_name
+        return FORECAST_API_URL, self.source_name
 
     def get_observations(self, latitude: float, longitude: float, timestamp: datetime, window_hours: int = 3) -> list[dict[str, Any]]:
         target = self._utc(timestamp)
@@ -87,6 +97,7 @@ class OpenMeteoEnvironmentalProvider(EnvironmentalProvider):
         if marine_data.get("error"):
             raise RuntimeError(marine_data.get("reason", "Open-Meteo Marine API error"))
 
+        wind_url, wind_source = self._wind_url(target)
         wind_params = {
             "latitude": latitude,
             "longitude": longitude,
@@ -95,7 +106,7 @@ class OpenMeteoEnvironmentalProvider(EnvironmentalProvider):
             "end_date": end,
             "timezone": "UTC",
         }
-        weather = requests.get(FORECAST_API_URL, params=wind_params, timeout=self.timeout_seconds)
+        weather = requests.get(wind_url, params=wind_params, timeout=self.timeout_seconds)
         weather.raise_for_status()
         weather_data = weather.json()
         if weather_data.get("error"):
@@ -133,7 +144,7 @@ class OpenMeteoEnvironmentalProvider(EnvironmentalProvider):
                     "current_direction_deg": float(current_dir),
                     "wind_speed_mps": round(wind_speed_mps, 6),
                     "wind_direction_deg": float(wind_dir),
-                    "source": self.source_name,
+                    "source": wind_source,
                     "quality": "MODELLED",
                 })
             except (TypeError, ValueError, IndexError):
