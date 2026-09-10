@@ -23,6 +23,7 @@ from .vessel_association import score_vessel_association, association_to_dict
 from .trajectory_evidence import analyze_trajectory, trajectory_to_dict
 from .evidence_fusion import fuse_evidence, fusion_to_dict
 from .candidate_ranking import rank_candidates, ranked_to_dict
+from .spill_vessel_graph import build_spill_vessel_graph
 from .incident_package import CandidateVessel, build_incident_package, incident_to_dict
 from .rf_corroboration import corroborate_rf
 
@@ -246,6 +247,7 @@ def run_real_pipeline(image_path: str | Path, center_lat: float | None = None,
 
     ais_matches = []
     ranked_candidates = []
+    vessel_graph = {"status": "NO_AIS_CANDIDATES", "vessel_count": 0, "nodes": [], "unresolved_hulls": [], "responsibility_status": "NOT_ESTABLISHED"}
     ais_source_status = "NOT_REQUESTED"
     if use_ais:
         if not georef_hulls:
@@ -268,31 +270,33 @@ def run_real_pipeline(image_path: str | Path, center_lat: float | None = None,
                 )
                 ais_matches.append(_candidate_evidence(hull_dict, result, coverage, ais_df, detection_time))
             ranked_candidates = ranked_to_dict(rank_candidates(ais_matches))
+            vessel_graph = build_spill_vessel_graph(ais_matches, ranked_candidates)
         else:
             ais_source_status = "UNAVAILABLE"
 
-    drift = {"status": "AWAITING_ENVIRONMENTAL_DATA", "origin_lat": None, "origin_lon": None, "uncertainty_km": None, "steps": [], "assumptions": [], "reason": "Current and wind observations are required before estimating a spill origin zone."}
+    ranking_by_mmsi = {str(item["mmsi"]): item for item in ranked_candidates if item.get("mmsi") is not None}
     candidate_objects = [CandidateVessel(
         mmsi=m.get("matched_mmsi"),
         vessel_name=m.get("matched_vessel_name"),
         association=m.get("association") or {},
         history=m.get("vessel_history"),
         trajectory=m.get("trajectory"),
+        ranking=ranking_by_mmsi.get(str(m.get("matched_mmsi"))) if m.get("matched_mmsi") is not None else None,
     ) for m in ais_matches]
     rf_result = corroborate_rf([], 0.0, 0.0)
     package = build_incident_package(
         incident_id=build_incident_id(detection_time),
         detection={"timestamp": timestamp, "source": "SAR_ANALYSIS"}, geolocation={"hulls": georef_hulls},
-        spill={"count": len(components), "components": components}, ais={"source_status": ais_source_status, "matches": ais_matches, "ranked_candidates": ranked_candidates},
-        environmental={"status": "NOT_AVAILABLE", "reason": "No environmental observations supplied to this run."}, drift=drift, rf=rf_result,
+        spill={"count": len(components), "components": components}, ais={"source_status": ais_source_status, "matches": ais_matches, "ranked_candidates": ranked_candidates, "vessel_graph": vessel_graph},
+        environmental={"status": "NOT_AVAILABLE", "reason": "No environmental observations supplied to this run."}, drift={"status": "AWAITING_ENVIRONMENTAL_DATA", "origin_lat": None, "origin_lon": None, "uncertainty_km": None, "steps": [], "assumptions": [], "reason": "Current and wind observations are required before estimating a spill origin zone."}, rf=rf_result,
         candidates=candidate_objects, limitations=["RF observations were not supplied.", "Environmental observations are not yet supplied."],
     )
     return {
         "incident": incident_to_dict(package),
-        "pipeline": {"status": "completed", "data_integrity": "REAL_ONLY", "stages": ["SAR", "SLICK_SEGMENTATION", "GEOLOCATION", "HULL_DETECTION", "AIS_CORRELATION", "CANDIDATE_RANKING", "INCIDENT_PACKAGING"], "inference_mode": inference_mode},
+        "pipeline": {"status": "completed", "data_integrity": "REAL_ONLY", "stages": ["SAR", "SLICK_SEGMENTATION", "GEOLOCATION", "HULL_DETECTION", "AIS_CORRELATION", "CANDIDATE_RANKING", "SPILL_VESSEL_GRAPH", "INCIDENT_PACKAGING"], "inference_mode": inference_mode},
         "sar": {"filename": path.name, "acquisition_timestamp": timestamp, "georeferenced": path.suffix.lower() in {".tif", ".tiff"}, "inference_mode": inference_mode},
         "slicks": {"count": len(components), "linear_count": slick["num_linear"], "blob_count": slick["num_blob"], "components": components},
         "hulls": {"count": len(hulls), "georeferenced_count": len(georef_hulls), "detections": hulls}, "drift": drift,
-        "ais": {"source_status": ais_source_status, "matches": ais_matches, "ranked_candidates": ranked_candidates, "interpretation": "AIS correlation is anchored to the SAR acquisition time. Local AIS activity does not by itself prove an individual vessel disabled AIS; vessel-history continuity and source coverage are required before a dark-vessel claim."},
+        "ais": {"source_status": ais_source_status, "matches": ais_matches, "ranked_candidates": ranked_candidates, "vessel_graph": vessel_graph, "interpretation": "AIS correlation is anchored to the SAR acquisition time. Local AIS activity does not by itself prove an individual vessel disabled AIS; vessel-history continuity and source coverage are required before a dark-vessel claim."},
         "rf": rf_result,
     }
