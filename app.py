@@ -7,6 +7,7 @@ dark-vessel AIS/RF attribution, and operator-reviewed response/report drafts.
 Endpoints:
   POST /api/process-sar       — SAR image upload + real pipeline
   POST /api/analyze-traffic   — real AIS correlation metadata
+  POST /api/analyze-drift     — environmental source-zone backtrack
   POST /api/prepare-response  — operator-reviewed Coast Guard response draft
   POST /api/build-report      — deterministic incident evidence report
   POST /api/analyze-incident  — Legacy single-call pipeline (retained)
@@ -67,6 +68,13 @@ class AnalyzeTrafficRequest(BaseModel):
     hull_lat: float
     hull_lon: float
     capture_time: Optional[str] = None
+
+
+class DriftAnalysisRequest(BaseModel):
+    incident: Dict[str, Any]
+    observations: List[Dict[str, Any]] = Field(default_factory=list)
+    windage: float = Field(default=0.03, ge=0.0, le=0.2)
+    uncertainty_km: float = Field(default=2.0, ge=0.1, le=100.0)
 
 
 class PrepareResponseRequest(BaseModel):
@@ -148,6 +156,21 @@ async def analyze_traffic(request: AnalyzeTrafficRequest) -> Dict[str, Any]:
                      "nearby_records": coverage.nearby_records, "confidence": coverage.coverage_confidence,
                      "reason": coverage.reason},
     }
+
+
+@app.post("/api/analyze-drift")
+async def analyze_drift(request: DriftAnalysisRequest) -> Dict[str, Any]:
+    """Enrich a canonical incident with estimated environmental source-zone evidence."""
+    from main.drift_analysis import enrich_incident_with_drift
+    try:
+        return enrich_incident_with_drift(
+            request.incident,
+            request.observations,
+            windage=request.windage,
+            uncertainty_km=request.uncertainty_km,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @app.post("/api/prepare-response")
