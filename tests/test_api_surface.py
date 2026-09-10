@@ -33,7 +33,9 @@ def test_environmental_observation_parser_accepts_a_list_of_records():
 
 def test_real_pipeline_has_explicit_integrity_markers():
     pipeline = importlib.import_module("main.imw_real_pipeline")
-    source = open(pipeline.__file__, encoding="utf-8").read()
-    assert '"data_integrity": "REAL_ONLY"' in source
-    assert '"status": "NOT_AVAILABLE"' in source
-    assert 'corroborate_rf([], 0.0, 0.0)' in source
+    drift = importlib.import_module("main.drift_analysis")
+    pipeline_source = open(pipeline.__file__, encoding="utf-8").read()
+    drift_source = open(drift.__file__, encoding="utf-8").read()
+    assert '"data_integrity": "REAL_ONLY"' in pipeline_source
+    assert '"status": "NOT_AVAILABLE"' in drift_source
+    assert 'corroborate_rf([], 0.0, 0.0)' in pipeline_source
