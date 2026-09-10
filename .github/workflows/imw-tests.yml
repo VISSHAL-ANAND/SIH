@@ -5,6 +5,7 @@ on:
     branches:
       - "phase-2/imw-real-pipeline"
       - "phase-2/imw-drift-evidence"
+      - "phase-2/imw-live-environment-final"
   pull_request:
 
 jobs:
@@ -34,4 +35,5 @@ jobs:
           tests/test_incident_response.py
           tests/test_incident_report.py
           tests/test_prepare_response_contract.py
+          tests/test_environmental_provider.py
           -q
