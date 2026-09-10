@@ -1,232 +1,25 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Indo Marine Watch (IMW)</title>
-
-    <!-- Google Fonts — Inter -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-
-    <!-- Leaflet CSS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-
-    <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
-
-    <!-- IMW Styles -->
     <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
-
-    <div class="app-layout">
-
-        <!-- ======== TOP NAVIGATION BAR ======== -->
-        <header class="topbar">
-            <div class="topbar-brand">
-                <div class="brand-icon">
-                    <i class="fa-solid fa-shield-halved"></i>
-                </div>
-                <h1>INDO MARINE WATCH <span>// IMW</span></h1>
-            </div>
-            <div class="topbar-right">
-                <span class="status-pill restricted">
-                    <span class="dot"></span> RESTRICTED
-                </span>
-                <span class="status-pill system-active">
-                    <span class="dot"></span> SYSTEM ACTIVE
-                </span>
-                <span class="status-pill clock" id="utc-clock">
-                    <i class="fa-regular fa-clock"></i>
-                    <span id="clock-value">--:--:-- UTC</span>
-                </span>
-            </div>
-        </header>
-
-        <!-- ======== LEFT SIDEBAR ======== -->
-        <aside class="sidebar">
-
-            <!-- SAR Upload Zone -->
-            <div class="sidebar-section">
-                <div class="section-label">SAR Image Upload</div>
-                <div class="upload-zone" id="upload-zone">
-                    <div class="upload-icon">
-                        <i class="fa-solid fa-satellite" id="upload-icon"></i>
-                    </div>
-                    <div class="upload-title" id="upload-title">Drop SAR Imagery Here</div>
-                    <div class="upload-subtitle" id="upload-subtitle">TIFF &middot; PNG &middot; JPG</div>
-                </div>
-                <input type="file" id="upload-input" class="hidden-input" accept=".tiff,.tif,.png,.jpg,.jpeg" />
-            </div>
-
-            <div class="sidebar-section"><div id="ais-investigation-window"></div></div>
-            <div class="sidebar-section"><div id="evidence-matrix"></div></div>
-            <div class="sidebar-section"><div id="vessel-investigation-record"></div></div>
-            <div class="sidebar-section"><div id="incident-response"></div><button id="export-incident-report" type="button">EXPORT INCIDENT REPORT</button></div>
-            <div class="sidebar-section" id="investigation-gates-section"><div class="section-label">Evidence Review</div><div id="investigation-gates"></div></div>
-            <div class="sidebar-divider"></div>
-
-            <!-- Coordinates -->
-            <div class="sidebar-section" data-requires-data="true" id="section-coords">
-                <div class="section-label">Extracted Coordinates</div>
-                <div class="metric-grid">
-                    <div class="metric-card">
-                        <div class="metric-label">Latitude</div>
-                        <div class="metric-value small" id="coord-lat">—</div>
-                    </div>
-                    <div class="metric-card">
-                        <div class="metric-label">Longitude</div>
-                        <div class="metric-value small" id="coord-lon">—</div>
-                    </div>
-                    <div class="metric-card full-width">
-                        <div class="metric-label">Bounding Box</div>
-                        <div class="metric-value small" id="coord-bbox">—</div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="sidebar-divider"></div>
-
-            <!-- Evidence Metrics -->
-            <div class="sidebar-section" data-requires-data="true" id="section-evidence">
-                <div class="section-label">Evidence Metrics</div>
-                <div class="metric-grid">
-                    <div class="metric-card">
-                        <div class="metric-label">Spill Area</div>
-                        <div class="metric-value" id="metric-area">—</div>
-                    </div>
-                    <div class="metric-card">
-                        <div class="metric-label">Shape Class</div>
-                        <div class="metric-value" id="metric-shape">—</div>
-                    </div>
-                    <div class="metric-card">
-                        <div class="metric-label">Eigenvalue Ratio</div>
-                        <div class="metric-value" id="metric-ratio">—</div>
-                    </div>
-                    <div class="metric-card">
-                        <div class="metric-label">Drift Dist.</div>
-                        <div class="metric-value" id="metric-drift">—</div>
-                    </div>
-                    <div class="metric-card full-width">
-                        <div class="metric-label">Estimated Origin</div>
-                        <div class="metric-value small" id="metric-origin">—</div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="sidebar-divider"></div>
-
-            <!-- AIS / RF Status -->
-            <div class="sidebar-section" data-requires-data="true" id="section-ais">
-                <div class="section-label">AIS / RF Intelligence</div>
-                <div class="status-panel">
-                    <div class="status-row">
-                        <span class="status-label">AIS Status</span>
-                        <span class="status-badge neutral" id="ais-badge">AWAITING</span>
-                    </div>
-                    <div class="status-row">
-                        <span class="status-label">Dark Vessel</span>
-                        <span class="status-badge neutral" id="dark-vessel-badge">—</span>
-                    </div>
-                    <div class="status-row">
-                        <span class="status-label">RF Lock</span>
-                        <span class="status-badge neutral" id="rf-lock-badge">—</span>
-                    </div>
-                    <div class="status-row">
-                        <span class="status-label">Threat Score</span>
-                        <div class="threat-score-container">
-                            <div class="threat-bar-track">
-                                <div class="threat-bar-fill" id="threat-bar"></div>
-                            </div>
-                            <span class="threat-score-value" id="threat-score">—</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="sidebar-divider"></div>
-
-            <!-- Ship Details -->
-            <div class="sidebar-section" data-requires-data="true" id="section-ship">
-                <div class="section-label">Suspect Vessel Profile</div>
-                <div class="ship-card">
-                    <div class="ship-card-row">
-                        <span class="ship-label">Vessel Name</span>
-                        <span class="ship-value" id="ship-name">—</span>
-                    </div>
-                    <div class="ship-card-row">
-                        <span class="ship-label">MMSI</span>
-                        <span class="ship-value" id="ship-mmsi">—</span>
-                    </div>
-                    <div class="ship-card-row">
-                        <span class="ship-label">Flag</span>
-                        <span class="ship-value" id="ship-flag">—</span>
-                    </div>
-                    <div class="ship-card-row">
-                        <span class="ship-label">Type</span>
-                        <span class="ship-value" id="ship-type">—</span>
-                    </div>
-                    <div class="ship-card-row">
-                        <span class="ship-label">Hull Confidence</span>
-                        <span class="ship-value" id="ship-confidence">—</span>
-                    </div>
-                </div>
-            </div>
-
-            <div class="sidebar-divider"></div>
-
-            <!-- Investigation Timeline -->
-            <div class="sidebar-divider"></div>
-            <div class="sidebar-section" data-requires-data="true" id="section-timeline">
-                <div class="section-label">Investigation Timeline</div>
-                <div class="imw-timeline" id="imw-timeline">
-                    <div class="timeline-empty">Awaiting incident evidence…</div>
-                </div>
-            </div>
-
-            <!-- Dispatch Button -->
-            <div class="sidebar-section">
-                <button class="btn-dispatch" id="btn-dispatch" disabled type="button"><i class="fa-solid fa-file-circle-check"></i> Prepare Coast Guard Response</button>
-                <div class="dispatch-confirmation" id="dispatch-confirm">
-                    <div class="dispatch-title">
-                        <i class="fa-solid fa-circle-check"></i> Response Draft Ready
-                    </div>
-                    <div class="dispatch-detail" id="dispatch-detail">—</div>
-                </div>
-            </div>
-
-        </aside>
-
-        <!-- ======== MAIN MAP VIEWPORT ======== -->
-        <main class="main-viewport">
-            <div id="map"></div>
-
-            <!-- Processing Overlay -->
-            <div class="processing-overlay" id="processing-overlay">
-                <div class="processing-spinner"></div>
-                <div class="processing-text">Processing AI Models...</div>
-                <div class="processing-sub">U-Net Segmentation → YOLOv8 Hull Detection → GNOME Drift Physics</div>
-            </div>
-        </main>
-
-    </div>
-
-    <!-- Toast Notification -->
-    <div class="toast" id="toast"></div>
-
-    <!-- Leaflet JS -->
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
-    <!-- IMW Application Logic -->
-    <script src="/static/investigation-gates.js"></script>
-    <script src="/static/ais-window.js"></script>
-    <script src="/static/evidence-matrix.js"></script>
-    <script src="/static/vessel-investigation.js"></script>
-    <script src="/static/incident-response.js"></script>
-    <script src="/static/incident-report-export.js"></script>
-    <script src="/static/app.js"></script>
-
-</body>
-</html>
+<div class="app-layout">
+<header class="topbar"><div class="topbar-brand"><div class="brand-icon"><i class="fa-solid fa-shield-halved"></i></div><h1>INDO MARINE WATCH <span>// IMW</span></h1></div><div class="topbar-right"><span class="status-pill restricted"><span class="dot"></span> RESTRICTED</span><span class="status-pill system-active"><span class="dot"></span> SYSTEM ACTIVE</span><span class="status-pill clock" id="utc-clock"><i class="fa-regular fa-clock"></i><span id="clock-value">--:--:-- UTC</span></span></div></header>
+<aside class="sidebar">
+<div class="sidebar-section"><div class="section-label">SAR Image Upload</div><div class="upload-zone" id="upload-zone"><div class="upload-icon"><i class="fa-solid fa-satellite" id="upload-icon"></i></div><div class="upload-title" id="upload-title">Drop SAR Imagery Here</div><div class="upload-subtitle" id="upload-subtitle">TIFF · PNG · JPG</div></div><input type="file" id="upload-input" class="hidden-input" accept=".tiff,.tif,.png,.jpg,.jpeg" /></div>
+<div class="sidebar-section"><div id="ais-investigation-window"></div></div><div class="sidebar-section"><div id="evidence-matrix"></div></div><div class="sidebar-section"><div id="vessel-investigation-record"></div></div><div class="sidebar-section"><div id="incident-response"></div><button id="export-incident-report" type="button">EXPORT INCIDENT REPORT</button></div><div class="sidebar-section" id="investigation-gates-section"><div class="section-label">Evidence Review</div><div id="investigation-gates"></div></div><div class="sidebar-divider"></div>
+<div class="sidebar-section" data-requires-data="true" id="section-coords"><div class="section-label">Extracted Coordinates</div><div class="metric-grid"><div class="metric-card"><div class="metric-label">Latitude</div><div class="metric-value small" id="coord-lat">—</div></div><div class="metric-card"><div class="metric-label">Longitude</div><div class="metric-value small" id="coord-lon">—</div></div><div class="metric-card full-width"><div class="metric-label">Bounding Box</div><div class="metric-value small" id="coord-bbox">—</div></div></div></div><div class="sidebar-divider"></div>
+<div class="sidebar-section" data-requires-data="true" id="section-evidence"><div class="section-label">Evidence Metrics</div><div class="metric-grid"><div class="metric-card"><div class="metric-label">Spill Area</div><div class="metric-value" id="metric-area">—</div></div><div class="metric-card"><div class="metric-label">Shape Class</div><div class="metric-value" id="metric-shape">—</div></div><div class="metric-card"><div class="metric-label">Eigenvalue Ratio</div><div class="metric-value" id="metric-ratio">—</div></div><div class="metric-card"><div class="metric-label">Drift Dist.</div><div class="metric-value" id="metric-drift">—</div></div><div class="metric-card full-width"><div class="metric-label">Estimated Origin</div><div class="metric-value small" id="metric-origin">—</div></div></div></div><div class="sidebar-divider"></div>
+<div class="sidebar-section" data-requires-data="true" id="section-ais"><div class="section-label">AIS / RF Intelligence</div><div class="status-panel"><div class="status-row"><span class="status-label">AIS Status</span><span class="status-badge neutral" id="ais-badge">AWAITING</span></div><div class="status-row"><span class="status-label">Dark Vessel</span><span class="status-badge neutral" id="dark-vessel-badge">—</span></div><div class="status-row"><span class="status-label">RF Lock</span><span class="status-badge neutral" id="rf-lock-badge">—</span></div><div class="status-row"><span class="status-label">Threat Score</span><div class="threat-score-container"><div class="threat-bar-track"><div class="threat-bar-fill" id="threat-bar"></div></div><span class="threat-score-value" id="threat-score">—</span></div></div></div></div><div class="sidebar-divider"></div>
+<div class="sidebar-section" data-requires-data="true" id="section-ship"><div class="section-label">Suspect Vessel Profile</div><div class="ship-card"><div class="ship-card-row"><span class="ship-label">Vessel Name</span><span class="ship-value" id="ship-name">—</span></div><div class="ship-card-row"><span class="ship-label">MMSI</span><span class="ship-value" id="ship-mmsi">—</span></div><div class="ship-card-row"><span class="ship-label">Flag</span><span class="ship-value" id="ship-flag">—</span></div><div class="ship-card-row"><span class="ship-label">Type</span><span class="ship-value" id="ship-type">—</span></div><div class="ship-card-row"><span class="ship-label">Hull Confidence</span><span class="ship-value" id="ship-confidence">—</span></div></div></div><div class="sidebar-divider"></div>
+<div class="sidebar-section" data-requires-data="true" id="section-timeline"><div class="section-label">Investigation Timeline</div><div class="imw-timeline" id="imw-timeline"><div class="timeline-empty">Awaiting incident evidence…</div></div></div><div class="sidebar-section"><button class="btn-dispatch" id="btn-dispatch" disabled type="button"><i class="fa-solid fa-file-circle-check"></i> Prepare Coast Guard Response</button><div class="dispatch-confirmation" id="dispatch-confirm"><div class="dispatch-title"><i class="fa-solid fa-circle-check"></i> Response Draft Ready</div><div class="dispatch-detail" id="dispatch-detail">—</div></div></div>
+</aside>
+<main class="main-viewport"><div id="map"></div><div class="processing-overlay" id="processing-overlay"><div class="processing-spinner"></div><div class="processing-text">Processing AI Models...</div><div class="processing-sub">U-Net Segmentation → YOLOv8 Hull Detection → GNOME Drift Physics</div></div></main></div><div class="toast" id="toast"></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script src="/static/investigation-gates.js"></script><script src="/static/ais-window.js"></script><script src="/static/evidence-matrix.js"></script><script src="/static/vessel-investigation.js"></script><script src="/static/incident-response.js"></script><script src="/static/incident-report-export.js"></script><script src="/static/imw-integration.js"></script><script src="/static/app.js"></script></body></html>
