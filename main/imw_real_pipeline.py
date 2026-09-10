@@ -35,8 +35,7 @@ def load_rgb_image(path: str | Path) -> np.ndarray:
 def _normalize_tile(data: np.ndarray) -> np.ndarray:
     """Convert a raster tile to stable uint8 RGB without inventing geospatial data."""
     arr = np.asarray(data, dtype=np.float32)
-    finite = np.isfinite(arr)
-    if not finite.any():
+    if not np.isfinite(arr).any():
         return np.zeros(arr.shape, dtype=np.uint8)
     out = np.zeros(arr.shape, dtype=np.float32)
     for band in range(arr.shape[2]):
@@ -61,7 +60,6 @@ def load_tiled_rgb(path: str | Path, tile_size: int = 1024, overlap: int = 128):
         import rasterio
     except ImportError as exc:
         raise RuntimeError("rasterio is required for tiled GeoTIFF ingestion") from exc
-
     step = tile_size - overlap
     with rasterio.open(path) as src:
         if src.count < 1:
@@ -138,23 +136,19 @@ def _run_slick_inference(path: Path, model):
     if path.suffix.lower() not in {".tif", ".tiff"}:
         image_rgb = load_rgb_image(path)
         return predict_and_classify(model, image_rgb), "FULL_IMAGE"
-
     try:
         import rasterio
     except ImportError as exc:
         raise RuntimeError("rasterio is required for GeoTIFF inference") from exc
-
     with rasterio.open(path) as src:
         height, width = src.height, src.width
     mask_sum = np.zeros((height, width), dtype=np.float32)
     mask_count = np.zeros((height, width), dtype=np.uint16)
-
     for x, y, tile in load_tiled_rgb(path):
         mask = predict_mask(model, tile)
         h, w = mask.shape
         mask_sum[y:y + h, x:x + w] += mask
         mask_count[y:y + h, x:x + w] += 1
-
     stitched = (mask_sum >= np.maximum(mask_count, 1) / 2.0).astype(np.uint8)
     from .shape_classifier import classify_slick_shape, components_to_dicts
     raw_components = classify_slick_shape(stitched)
@@ -168,6 +162,65 @@ def _run_slick_inference(path: Path, model):
     }, "TILED_GEOTIFF"
 
 
+def _parse_timestamp(value: str | datetime) -> datetime:
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=None)
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00")).replace(tzinfo=None)
+
+
+def _candidate_evidence(hull: dict, result, coverage, ais_df, detection_time: datetime) -> dict:
+    """Build transparent spill/hull/AIS evidence anchored to SAR time."""
+    history = None
+    trajectory = None
+    if result.has_ais_match and result.matched_mmsi:
+        history_obj = analyze_vessel_history(
+            ais_df, result.matched_mmsi, hull["lat"], hull["lon"], detection_time
+        )
+        history = history_to_dict(history_obj)
+        trajectory_obj = analyze_trajectory(
+            ais_df, result.matched_mmsi, hull["lat"], hull["lon"], detection_time
+        )
+        trajectory = trajectory_to_dict(trajectory_obj)
+
+    association = association_to_dict(score_vessel_association(
+        result.hull_id,
+        result.matched_mmsi,
+        result.matched_vessel_name,
+        result.distance_km,
+        result.time_diff_hours,
+        history,
+        coverage.status,
+    ))
+    fusion = fusion_to_dict(fuse_evidence(
+        max(0.0, 1.0 - result.distance_km / 10.0) if result.distance_km is not None else None,
+        max(0.0, 1.0 - result.time_diff_hours / 6.0) if result.time_diff_hours is not None else None,
+        history.get("evidence_strength") if history else None,
+        trajectory.get("trajectory_score") if trajectory else None,
+        None,
+    ))
+    return {
+        "hull_id": result.hull_id,
+        "has_ais_match": result.has_ais_match,
+        "matched_mmsi": result.matched_mmsi,
+        "matched_vessel_name": result.matched_vessel_name,
+        "distance_km": result.distance_km,
+        "time_diff_hours": result.time_diff_hours,
+        "spatial_distance_km": result.distance_km,
+        "temporal_delta_min": None if result.time_diff_hours is None else round(result.time_diff_hours * 60.0, 2),
+        "suspicion_score": result.suspicion_score,
+        "reason": result.reason,
+        "coverage_status": coverage.status,
+        "coverage_confidence": coverage.coverage_confidence,
+        "coverage_reason": coverage.reason,
+        "vessel_history": history,
+        "trajectory": trajectory,
+        "association": association,
+        "evidence_fusion": fusion,
+        "responsibility_status": "NOT_ESTABLISHED",
+        "evidence_time_anchor": detection_time.isoformat() + "Z",
+    }
+
+
 def run_real_pipeline(image_path: str | Path, center_lat: float | None = None,
                       center_lon: float | None = None, use_ais: bool = True) -> dict[str, Any]:
     """Run the real Phase-2 chain. No synthetic hulls, AIS, RF, or coordinates."""
@@ -176,6 +229,7 @@ def run_real_pipeline(image_path: str | Path, center_lat: float | None = None,
         raise FileNotFoundError(f"SAR image not found: {path}")
 
     timestamp = image_timestamp(path)
+    detection_time = _parse_timestamp(timestamp)
     model = load_model()
     slick, inference_mode = _run_slick_inference(path, model)
 
@@ -197,38 +251,34 @@ def run_real_pipeline(image_path: str | Path, center_lat: float | None = None,
         elif Path(AIS_CSV_PATH).exists():
             ais_source_status = "REAL_MARINECADASTRE"
             ais_df = load_ais_data(AIS_CSV_PATH)
-            relevant = filter_ais_for_hulls(ais_df, georef_hulls)
+            relevant = filter_ais_for_hulls(ais_df, georef_hulls, time_hours=6.0)
+            # Correlation is explicitly anchored to SAR acquisition time.
             for idx, hull in enumerate(georef_hulls):
-                ts = datetime.fromisoformat(hull["timestamp"].replace("Z", "+00:00")).replace(tzinfo=None)
-                hull_dict = {"hull_id": idx, "lat": hull["lat"], "lon": hull["lon"], "timestamp": ts}
+                hull_dict = {
+                    "hull_id": idx,
+                    "lat": hull["lat"],
+                    "lon": hull["lon"],
+                    "timestamp": detection_time,
+                }
                 result = match_all_hulls([hull_dict], relevant)[0]
-                coverage = assess_ais_coverage(ais_df, hull_dict["lat"], hull_dict["lon"], hull_dict["timestamp"])
-                history = analyze_vessel_history(ais_df, result.matched_mmsi, hull_dict["lat"], hull_dict["lon"], hull_dict["timestamp"]) if result.has_ais_match and result.matched_mmsi else None
-                trajectory = analyze_trajectory(ais_df, result.matched_mmsi, hull_dict["lat"], hull_dict["lon"], hull_dict["timestamp"]) if result.has_ais_match and result.matched_mmsi else None
-                ais_matches.append({
-                    "hull_id": result.hull_id, "has_ais_match": result.has_ais_match,
-                    "matched_mmsi": result.matched_mmsi, "matched_vessel_name": result.matched_vessel_name,
-                    "distance_km": result.distance_km, "time_diff_hours": result.time_diff_hours,
-                    "suspicion_score": result.suspicion_score, "reason": result.reason,
-                    "coverage_status": coverage.status, "coverage_confidence": coverage.coverage_confidence,
-                    "coverage_reason": coverage.reason,
-                    "vessel_history": history_to_dict(history) if history else None,
-                    "association": association_to_dict(score_vessel_association(result.hull_id, result.matched_mmsi, result.matched_vessel_name, result.distance_km, result.time_diff_hours, history_to_dict(history) if history else None)),
-                    "trajectory": trajectory_to_dict(trajectory) if trajectory else None,
-                    "evidence_fusion": fusion_to_dict(fuse_evidence(
-                        max(0.0, 1.0 - result.distance_km / 10.0) if result.distance_km is not None else None,
-                        max(0.0, 1.0 - result.time_diff_hours / 6.0) if result.time_diff_hours is not None else None,
-                        history.evidence_strength if history else None, trajectory.trajectory_score if trajectory else None, None,
-                    )),
-                })
+                coverage = assess_ais_coverage(
+                    ais_df, hull_dict["lat"], hull_dict["lon"], detection_time
+                )
+                ais_matches.append(_candidate_evidence(hull_dict, result, coverage, ais_df, detection_time))
         else:
             ais_source_status = "UNAVAILABLE"
 
     drift = {"status": "AWAITING_ENVIRONMENTAL_DATA", "origin_lat": None, "origin_lon": None, "uncertainty_km": None, "steps": [], "assumptions": [], "reason": "Current and wind observations are required before estimating a spill origin zone."}
-    candidate_objects = [CandidateVessel(mmsi=m.get("matched_mmsi"), vessel_name=m.get("matched_vessel_name"), association=m.get("evidence_fusion") or m.get("association") or {}, history=m.get("vessel_history"), trajectory=m.get("trajectory")) for m in ais_matches]
+    candidate_objects = [CandidateVessel(
+        mmsi=m.get("matched_mmsi"),
+        vessel_name=m.get("matched_vessel_name"),
+        association=m.get("association") or {},
+        history=m.get("vessel_history"),
+        trajectory=m.get("trajectory"),
+    ) for m in ais_matches]
     rf_result = corroborate_rf([], 0.0, 0.0)
     package = build_incident_package(
-        incident_id=build_incident_id(datetime.fromisoformat(timestamp.replace("Z", "+00:00"))),
+        incident_id=build_incident_id(detection_time),
         detection={"timestamp": timestamp, "source": "SAR_ANALYSIS"}, geolocation={"hulls": georef_hulls},
         spill={"count": len(components), "components": components}, ais={"source_status": ais_source_status, "matches": ais_matches},
         environmental={"status": "NOT_AVAILABLE", "reason": "No environmental observations supplied to this run."}, drift=drift, rf=rf_result,
@@ -240,6 +290,6 @@ def run_real_pipeline(image_path: str | Path, center_lat: float | None = None,
         "sar": {"filename": path.name, "acquisition_timestamp": timestamp, "georeferenced": path.suffix.lower() in {".tif", ".tiff"}, "inference_mode": inference_mode},
         "slicks": {"count": len(components), "linear_count": slick["num_linear"], "blob_count": slick["num_blob"], "components": components},
         "hulls": {"count": len(hulls), "georeferenced_count": len(georef_hulls), "detections": hulls}, "drift": drift,
-        "ais": {"source_status": ais_source_status, "matches": ais_matches, "interpretation": "Local AIS activity does not by itself prove an individual vessel disabled AIS. Vessel-history continuity is required before a dark-vessel claim."},
+        "ais": {"source_status": ais_source_status, "matches": ais_matches, "interpretation": "AIS correlation is anchored to the SAR acquisition time. Local AIS activity does not by itself prove an individual vessel disabled AIS; vessel-history continuity and source coverage are required before a dark-vessel claim."},
         "rf": rf_result,
     }
