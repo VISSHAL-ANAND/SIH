@@ -1,4 +1,4 @@
-// Phase 5C — connect the canonical incident to all operator UI modules.
+// Phase 5D — canonical incident integration and report export.
 (function () {
   let latestReport = null;
 
@@ -18,15 +18,13 @@
       }
     },
     setReport(report) { latestReport = report; },
+    getReport() { return latestReport; },
     exportReport() {
       if (!latestReport) return {ok:false, reason:'NO_REPORT'};
       return window.exportIMWIncidentReport ? window.exportIMWIncidentReport(latestReport) : {ok:false, reason:'EXPORT_MODULE_UNAVAILABLE'};
     }
   };
 
-  // The legacy app owns the upload flow. Intercept only the process-sar
-  // response so the canonical incident package is rendered immediately,
-  // without changing or duplicating the upload request.
   const nativeFetch = window.fetch.bind(window);
   window.fetch = async function (...args) {
     const response = await nativeFetch(...args);
@@ -36,10 +34,40 @@
         const copy = response.clone();
         copy.json().then(payload => {
           const incident = payload?.incident || null;
-          if (incident && window.imwIntegration) window.imwIntegration.sync(incident);
+          if (incident) window.imwIntegration.sync(incident);
         }).catch(() => {});
       }
     } catch (_) {}
     return response;
   };
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const button = document.getElementById('export-incident-report');
+    if (!button) return;
+    button.addEventListener('click', async () => {
+      const incident = window.currentIncident?.incident || window.currentIncident || null;
+      if (!incident?.incident_id) {
+        window.showToast?.('No canonical incident available to export.', 'warning');
+        return;
+      }
+      button.disabled = true;
+      try {
+        const responseDraft = window.imwPendingResponse || null;
+        const resp = await nativeFetch('/api/build-report', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({incident, response_draft: responseDraft})
+        });
+        if (!resp.ok) throw new Error('Report API returned ' + resp.status);
+        const report = await resp.json();
+        window.imwIntegration.setReport(report);
+        const result = window.imwIntegration.exportReport();
+        if (!result.ok) throw new Error(result.reason || 'EXPORT_FAILED');
+        window.showToast?.('Auditable incident report exported.', 'success');
+      } catch (err) {
+        window.showToast?.('Could not build report: ' + err.message, 'warning');
+      } finally {
+        button.disabled = false;
+      }
+    });
+  });
 })();
