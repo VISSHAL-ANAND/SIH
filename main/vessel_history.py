@@ -1,7 +1,7 @@
 """AIS vessel-history analysis for IMW.
 
-This module does not infer intentional AIS shutdown. It measures the observed
-broadcast continuity of a candidate MMSI before/after a SAR detection.
+This module measures observed AIS continuity around a SAR event. A missing
+broadcast is never treated as proof that AIS was intentionally disabled.
 """
 from __future__ import annotations
 
@@ -39,7 +39,23 @@ def analyze_vessel_history(
     lookahead_hours: float = 12.0,
     proximity_km: float = 25.0,
 ) -> VesselHistoryResult:
-    """Measure a candidate vessel's observed AIS continuity around detection."""
+    """Measure a candidate vessel's observed AIS continuity around detection.
+
+    ``proximity_km`` controls whether a broadcast is considered spatially
+    relevant to the SAR hull. Missing post-event observations are reported as
+    an unresolved gap and require local coverage review before interpretation.
+    """
+    required = {"mmsi", "timestamp", "lat", "lon"}
+    if ais_df is None or ais_df.empty or not required.issubset(ais_df.columns):
+        return VesselHistoryResult(
+            mmsi=str(mmsi), vessel_name=None, last_before_time=None,
+            last_before_distance_km=None, first_after_time=None,
+            first_after_distance_km=None, gap_minutes=None,
+            broadcasts_before=0, broadcasts_after=0,
+            status="NO_VESSEL_HISTORY", evidence_strength=0.0,
+            reason="No usable AIS records for this MMSI were supplied.",
+        )
+
     vessel = ais_df[ais_df["mmsi"].astype(str) == str(mmsi)].copy()
     if vessel.empty:
         return VesselHistoryResult(
@@ -52,8 +68,10 @@ def analyze_vessel_history(
         )
 
     vessel["timestamp"] = pd.to_datetime(vessel["timestamp"], errors="coerce").dt.tz_localize(None)
+    vessel["lat"] = pd.to_numeric(vessel["lat"], errors="coerce")
+    vessel["lon"] = pd.to_numeric(vessel["lon"], errors="coerce")
+    vessel = vessel.dropna(subset=["timestamp", "lat", "lon"]).sort_values("timestamp")
     detection_time = detection_time.replace(tzinfo=None)
-    vessel = vessel.dropna(subset=["timestamp"]).sort_values("timestamp")
 
     before = vessel[
         (vessel["timestamp"] <= detection_time)
@@ -68,7 +86,8 @@ def analyze_vessel_history(
         if frame.empty:
             return None
         row = frame.iloc[-1]
-        return float(haversine_km(hull_lat, hull_lon, row["lat"], row["lon"]))
+        d = float(haversine_km(hull_lat, hull_lon, row["lat"], row["lon"]))
+        return round(d, 3) if d <= proximity_km else round(d, 3)
 
     last_before = before.iloc[-1] if not before.empty else None
     first_after = after.iloc[0] if not after.empty else None
@@ -82,9 +101,18 @@ def analyze_vessel_history(
         strength = 0.0
         reason = "The supplied AIS dataset contains no records for this vessel around the SAR event."
     elif first_after is not None and last_before is not None:
-        status = "CONTINUITY_OBSERVED"
-        strength = 0.9 if (gap_minutes or 0) <= 30 else max(0.2, 1.0 - (gap_minutes or 0) / 360.0)
-        reason = "The candidate vessel has AIS observations on both sides of the SAR event."
+        if gap_minutes is not None and gap_minutes <= 30:
+            status = "CONTINUITY_OBSERVED"
+            strength = 0.9
+            reason = "AIS observations are present on both sides of the SAR event with a short observed gap."
+        elif gap_minutes is not None and gap_minutes <= 180:
+            status = "OBSERVED_GAP_REQUIRES_REVIEW"
+            strength = max(0.2, 1.0 - gap_minutes / 360.0)
+            reason = "AIS observations bracket the SAR event, but the interval between broadcasts is large enough to require coverage review."
+        else:
+            status = "LONG_OBSERVED_GAP_REQUIRES_REVIEW"
+            strength = 0.2
+            reason = "AIS observations exist before and after the SAR event with a long observed interval; this does not establish intentional AIS shutdown."
     elif last_before is not None:
         status = "POST_EVENT_GAP_UNRESOLVED"
         strength = 0.25
@@ -107,7 +135,7 @@ def analyze_vessel_history(
         last_before_distance_km=distance(before),
         first_after_time=first_after["timestamp"].to_pydatetime() if first_after is not None else None,
         first_after_distance_km=distance(after),
-        gap_minutes=gap_minutes,
+        gap_minutes=round(gap_minutes, 2) if gap_minutes is not None else None,
         broadcasts_before=len(before),
         broadcasts_after=len(after),
         status=status,
