@@ -164,6 +164,7 @@ def enrich_incident_with_drift(
     The incident is expected to contain ``spill.components`` with a
     geolocation object. No candidate vessel is promoted from this operation.
     """
+    rows = list(observations or [])
     enriched = dict(incident)
     spill = incident.get("spill") or {}
     components = spill.get("components") or []
@@ -173,14 +174,14 @@ def enrich_incident_with_drift(
         location.get("lat") if location else None,
         location.get("lon") if location else None,
         detection.get("timestamp"),
-        observations,
+        rows,
         windage=windage,
         uncertainty_km=uncertainty_km,
     )
     enriched["drift"] = drift_to_dict(result)
     enriched["environmental"] = {
-        "status": "AVAILABLE" if observations else "NOT_AVAILABLE",
-        "observation_count": len(list(observations)) if observations else 0,
+        "status": "AVAILABLE" if rows else "NOT_AVAILABLE",
+        "observation_count": len(rows),
         "reason": result.reason,
     }
     return enriched
