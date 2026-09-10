@@ -36,4 +36,5 @@ jobs:
           tests/test_incident_report.py
           tests/test_prepare_response_contract.py
           tests/test_environmental_provider.py
+          tests/test_gfw_ais_provider.py
           -q
