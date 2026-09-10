@@ -1,268 +1,195 @@
-# Ship Detection & Attribution — Track (SIH26143)
+# Indo Marine Watch (IMW)
 
-Hey — this is your corner of the oil-spill project: finding the actual slick
-in a SAR image before anyone can figure out who caused it. Everything below
-is set up so you can just run it, not go hunting for what's missing.
+**SIH26143 — Leveraging Satellite Imagery to Determine Oil Spills at Sea Along with AIS Data Correlations to Identify Vessel Responsible for the Spill**
 
-## Install this first
-```bash
-pip install ultralytics rasterio pyproj gdown pyyaml tqdm opencv-python scikit-learn --break-system-packages
-```
-You'll also want a GPU if you can get one (Colab's free T4 is fine). CPU
-works too, just slower — see the note in step 2 below.
+Indo Marine Watch is a software pipeline for maritime incident investigation. It starts from a SAR image, detects oil-slick candidates and physical vessel hulls, geolocates evidence when the source raster contains valid geospatial metadata, correlates detected hulls with AIS records, analyses vessel-history continuity, adds environmental drift evidence when real/modelled observations are available, and produces an operator-reviewed incident report and Coast Guard response draft.
 
----
+> **Important:** IMW is an investigation and decision-support system. It does not declare legal responsibility, invent missing sensor data, or transmit a Coast Guard message automatically.
 
-## What's done vs. what's left
+## Current architecture
 
-| File | Where it stands | Built |
-|---|---|---|
-| `src/preprocess.py` | Ready — just point it at the dataset | 2026-08-23 18:21 UTC |
-| `src/train_unet.py` | Ready — run it after preprocessing | 2026-08-23 18:21 UTC |
-| `data/processed/best_unet.pt` | Doesn't exist yet — this is what running the scripts produces | not yet |
-
----
-
-## Step 1 — Get the dataset
-
-We're using the **MKLab Oil Spill Detection Dataset** on Zenodo. It's the one
-most teams working this exact problem end up using, because it's the only
-public dataset that separates a real "Oil Spill" from a "Look-alike" — which
-matters a lot, since look-alikes are the main source of false positives in
-this kind of project.
-
-1. Grab it here: https://zenodo.org/records/6552722 (free account, few GB — Zenodo doesn't allow scripted bulk downloads, so this part's manual)
-2. Unzip it into `data/raw/` so it looks like this:
-   ```
-   data/raw/train/images/*.jpg
-   data/raw/train/labels/*.png
-   data/raw/test/images/*.jpg
-   data/raw/test/labels/*.png
-   ```
-3. Run the preprocessing script:
-   ```bash
-   python training\preprocess.py
-   ```
-   This resizes everything, turns the color masks into class-index masks, and
-   splits it into train/val/test as `.npy` files.
-
-   **One thing to actually look at:** the script prints out how many pixels
-   belong to each class. If "oil_spill" is only 2-3% of all pixels, that's a
-   real imbalance problem worth flagging to the team — not something to just
-   shrug off.
-
-## Step 2 — Train the baseline model
-
-```bash
-python training\train_unet.py
+```text
+SAR image / GeoTIFF
+        |
+        v
+Real U-Net slick inference
+        |
+        +--> geometric slick-shape analysis
+        |
+        +--> physical hull detection (YOLO)
+        |        |
+        |        +--> WGS84 geolocation when GeoTIFF metadata exists
+        |
+        +--> real AIS correlation
+        |        |
+        |        +--> candidate vessels
+        |        +--> AIS coverage / gap state
+        |        +--> vessel history + trajectory evidence
+        |        +--> transparent candidate ranking
+        |
+        +--> environmental observations
+        |        |
+        |        +--> current + wind vectors
+        |        +--> backward drift source-zone estimate
+        |
+        +--> RF corroboration status
+        |        `--> NOT_IMPLEMENTED until a real provider is connected
+        |
+        v
+Canonical incident package
+        |
+        +--> evidence matrix / timeline / vessel investigation UI
+        +--> deterministic incident report
+        `--> Coast Guard response DRAFT (operator confirmation required)
 ```
 
-This isn't training from scratch — it uses a ResNet34 encoder that's already
-pretrained on ImageNet, and just fine-tunes it for our classes. Given we've
-got 3 days, not 3 weeks, training from zero simply wouldn't converge to
-anything usable in time. This will.
+## Data-integrity rules
 
-On a GPU, expect well under an hour for 15 epochs. Stuck on CPU only? Drop
-`EPOCHS` down to 5-8 in the script just to get a working checkpoint today,
-then re-run it properly once someone gets you GPU time.
+The canonical `app.py` API is **real-only**:
 
-**Watch "Oil Spill IoU" in the console, not the accuracy number.** Accuracy
-will look great even if the model just learns to predict "background"
-everywhere, because most of any SAR frame genuinely is open sea. Oil Spill
-IoU is the number that tells you if it's actually working.
+- SAR inference uses the configured trained model; there is no fake SAR result fallback.
+- GeoTIFF coordinates are marked as real geospatial evidence. Plain image coordinates are only estimated when the operator supplies an explicit image centre.
+- AIS attribution uses configured real AIS records. If the source is missing, the API reports `NO_AIS_COVERAGE` / `UNAVAILABLE` rather than manufacturing vessel positions.
+- An AIS gap means **an observed data gap**. It does not prove intentional AIS shutdown, spoofing, or legal responsibility.
+- Environmental evidence comes from Open-Meteo Marine + Forecast APIs when available. Provider failures remain explicit `UNAVAILABLE` states.
+- Drift is a modelled source-zone estimate, not a legal attribution radius.
+- RF evidence is `NOT_IMPLEMENTED` until a real RF provider is connected.
+- Coast Guard response generation creates a draft only: `DRAFT_REQUIRES_OPERATOR_CONFIRMATION` and `NOT_SENT`.
 
----
+## Run locally
 
-## Where this feeds into tomorrow
+### 1. Install Python dependencies
 
-Once you've got `data/processed/best_unet.pt`, that's the input for your Aug
-24 task — the linear-vs-blob shape classifier. A **linear** slick shape
-usually means a moving vessel discharge (which is a real lead for
-RINOSH/ASHMIL's suspect-matching work); a **blob** shape usually means a
-static leak, less tied to one passing ship. So today's work isn't just a
-box to check — it's what tomorrow's differentiation piece actually runs on.
-
-## If you get stuck today
-
-- Zenodo download being annoying → ask around, someone on the team may
-  already have it downloaded.
-- No GPU → Colab's free tier handles this dataset size fine. Just upload
-  the `.npy` files from `data/processed/` and run `train_unet.py` there.
-
-
-# Pipeline Integration — taken over from RATHIMEENA by VISSHAL
-
-## Install this first
-```bash
-pip install torch torchvision segmentation-models-pytorch opencv-python-headless scipy numpy pillow pandas ultralytics rasterio pyproj folium
-```
-
-## What's done vs. what's left
-
-| File | Where it stands | Built |
-|---|---|---|
-| `pipeline_contracts.py` | Ready — data contract, now includes real RINOSH + real AIS formats | 2026-08-27 10:56 UTC |
-| `main\integration_pipeline.py` | Ready — 3 of 4 stages REAL and verified, drift still mocked | 2026-08-27 10:56 UTC |
-
-## What's real vs. mocked right now
-
-- **Slick detection** — REAL (VISSHAL's trained U-Net + shape classifier)
-- **Hull detection** — REAL (RINOSH's trained YOLOv8 detector — geo-conversion
-  math independently verified against hand-computed values, both plain
-  lat/lon and UTM-projected cases passed)
-- **AIS matching** — REAL (VISSHAL's spatial-temporal matcher — self-tested)
-- **Drift simulation** — still MOCKED, SIMI's real simulation isn't built yet
-
-Only drift/jurisdiction routing remains fake. Three of four pipeline stages
-are now genuinely connected, not staged.
-
-## Important: the geo caveat
-
-RINOSH's detector returns REAL lat/lon only when given a georeferenced
-raster (GeoTIFF with a valid transform). Our current demo/training images
-(Kaggle SOS chips) are plain `.jpg` with no geo metadata — so on those,
-lat/lon legitimately comes back `None`. The pipeline falls back to
-`geolocation.py`'s demo-anchor approximation ONLY in that case — it never
-overwrites a real coordinate. If you get one real georeferenced Sentinel-1
-scene before the demo, running it through will produce genuinely real
-coordinates instead of the anchor guess. Be upfront about this distinction
-if a judge asks how coordinates are derived — don't imply real geocoding on
-data that doesn't have it.
-
-## How to run it
-
-1. Make sure `sih26143_slick_detection`, `sih26143_ship_detection`, and
-   `sih26143_ais_matching` folders are all siblings of this one (same
-   parent directory) — the imports assume that layout.
-2. RINOSH's `best_unet.pt` needs to exist at
-   `sih26143_ship_detection/runs/detect/sar_hull_detector/weights/best_unet.pt`
-3. Real AIS data: point `ais_matcher.py`'s `AIS_CSV_PATH` at a real
-   MarineCadastre download, or the pipeline defaults to synthetic AIS data
-   for testing (fine for verifying wiring, NOT for the actual pitch).
-4. Run:
-```bash
-python -m main.integration_pipeline
-```
-
-## Project layout
-
-- `main\` contains the runtime pipeline modules.
-- `training\` contains dataset preparation and model-training scripts.
-- `tests\` contains standalone verification and evaluation scripts.
-- `data\`, `archive\`, and `AIS_CSV_PATH\` contain project data and model inputs.
-
-Run the geolocation test from the repository root:
+Python 3.11 is the CI target.
 
 ```bash
-python -m tests.test_geo_conversion
+python -m venv .venv
+# Windows
+.venv\Scripts\activate
+# Linux/macOS
+# source .venv/bin/activate
+
+python -m pip install --upgrade pip
+pip install -r requirements.txt
 ```
 
-## Verified through actual testing, not just written
+### 2. Provide trained model weights
 
-- RINOSH's geo-conversion math: independently re-run, both test cases
-  (plain lat/lon, UTM reprojection) passed against hand-computed expected
-  values.
-- Integration wiring: tested with a stub matching his exact documented
-  output format (since his trained weights aren't available in this
-  environment) — caught and fixed a real timezone bug (his ISO timestamps
-  are UTC-aware, AIS data is naive) before it could break on demo day.
+The canonical pipeline expects:
 
-## Still open
-- Drift simulation (SIMI's task) — the last mock.
-- Real AIS data hasn't been run through yet — only synthetic, for wiring
-  verification.
-- A real georeferenced Sentinel-1 scene would upgrade the geo story from
-  "disclosed approximation" to "genuinely real," if there's time to get one.
+```text
+data/processed/best_unet.pt
+runs/detect/sar_hull_detector/weights/best_unet.pt
+```
 
-# Drift Simulation — taken over from SIMI by VISSHAL
+These are model inputs, not generated demo data. If a required checkpoint is absent, IMW should report the dependency failure rather than silently substituting another model.
 
-## Install this first
+### 3. Provide real AIS data when available
+
+`main/ais_matcher.py` currently points to:
+
+```text
+AIS_CSV_PATH/ais-2025-01-01
+```
+
+The matcher expects MarineCadastre-style columns such as `mmsi`, `base_date_time`, `longitude`, `latitude`, `sog`, `cog`, `heading`, and vessel metadata.
+
+**Geographic limitation:** the current MarineCadastre sample is not an Indian-water feed. It is suitable for matcher validation, but it should not be presented as live Indian-water AIS during the SIH pitch. Global Fishing Watch integration remains a future provider task until valid API access is available.
+
+### 4. Start the API
+
 ```bash
-pip install requests pandas
+uvicorn app:app --host 0.0.0.0 --port 8000
 ```
 
-## What's done vs. what's left
+Open the dashboard at `http://localhost:8000`.
 
-| File | Where it stands | Built |
-|---|---|---|
-| `ocean_wind_loader.py` | Ready — real data source, parsing verified | 2026-08-31 09:46 UTC |
-| `drift_simulation.py` | Ready — physics self-tests all pass | 2026-08-31 09:46 UTC |
-| Jurisdiction routing (ICG zones/500m exclusion) | NOT built — the "Done" status on Notion for this doesn't reflect real work | not yet |
-| Validation against a real spill case | NOT built | not yet |
+## API surface
 
-## Data source: Open-Meteo instead of raw HYCOM/GFS
+| Endpoint | Purpose |
+|---|---|
+| `POST /api/process-sar` | Canonical SAR → slick → hull → AIS → evidence pipeline |
+| `POST /api/analyze-traffic` | Correlate a supplied hull location with configured AIS |
+| `POST /api/analyze-drift` | Analyse operator-supplied environmental observations |
+| `POST /api/prepare-response` | Build an operator-reviewed Coast Guard response draft |
+| `POST /api/build-report` | Build a deterministic incident evidence report |
+| `GET /` | Serve the IMW dashboard |
 
-Raw HYCOM (currents) and GFS (wind) access means dealing with THREDDS/
-OPeNDAP servers or NOMADS GRIB files — real, but genuinely painful to
-integrate correctly under time pressure. **Open-Meteo** provides the same
-type of real data through a free, keyless JSON REST API, sourced from real
-models including NOAA GFS (wind) and Copernicus Marine/MeteoFrance SMOC
-(ocean currents). No API key needed, free for non-commercial use.
+## Environmental evidence
 
-**Be honest about this in the pitch:** "We use Open-Meteo's API layer over
-real NOAA/Copernicus models rather than raw HYCOM/GFS file access, for
-integration speed within the hackathon window. The underlying data is
-real; the access method is simplified."
+The live environmental adapter uses Open-Meteo's Marine API for ocean-current information and the Forecast/Historical Forecast API for wind observations. Historical SAR timestamps are routed to the historical forecast service when they are old enough that current forecast data is inappropriate.
 
-## The physical model: the "3% wind factor" rule
+The drift calculation uses the configured windage factor (default `0.03`) and records its assumptions and uncertainty. It is intentionally presented as evidence for investigation, not as proof of where a discharge legally originated.
 
-This is a real, established approximation used in actual operational spill
-models — including NOAA's own GNOME tool, which the original task
-explicitly referenced. Surface drift velocity ≈ ocean current + (3% of
-wind speed, in wind direction). This is a genuine simplification (real
-Ekman transport physics is more complex), but the 3% factor itself is not
-invented for this project — it's a widely-cited real approximation.
+## Testing
 
-## How to run it
+The CI workflow runs the deterministic IMW contract suite covering:
 
-```python
-from ocean_wind_loader import fetch_currents_and_wind
-from drift_simulation import simulate_backward_drift
-from datetime import datetime
+- API surface and integrity markers
+- SAR/investigation contract
+- geolocation
+- AIS candidate discovery
+- candidate ranking
+- vessel history and association
+- trajectory evidence
+- drift analysis
+- environmental-provider conversions and historical routing
+- incident package/report/response contracts
+- RF corroboration state
 
-# 1. Get real current + wind data for your demo region/date
-data = fetch_currents_and_wind(
-    lat=20.85, lon=69.20,  # Gujarat demo anchor
-    start_date="2026-08-20", end_date="2026-08-20",
-)
-print(data)
+Run the same suite locally with:
 
-# 2. Pick the hour closest to your slick's detection time, then run the
-#    backward simulation
-row = data.iloc[12]  # e.g. noon
-result = simulate_backward_drift(
-    slick_lat=20.85, slick_lon=69.20,
-    detection_time=datetime(2026, 8, 20, 12, 0, 0),
-    current_velocity_kmh=row["current_velocity_kmh"],
-    current_direction_deg=row["current_direction_deg"],
-    wind_speed_kmh=row["wind_speed_kmh"],
-    wind_direction_deg=row["wind_direction_deg"],
-    hours_back=6.0,
-)
-print(f"Estimated origin: {result.origin_lat}, {result.origin_lon}")
+```bash
+python -m pytest \
+  tests/test_rf_corroboration.py \
+  tests/test_incident_package.py \
+  tests/test_imw_e2e_contract.py \
+  tests/test_drift_analysis.py \
+  tests/test_api_surface.py \
+  tests/test_candidate_ranking.py \
+  tests/test_ais_candidates.py \
+  tests/test_geolocation_pixel_center.py \
+  tests/test_incident_response.py \
+  tests/test_incident_report.py \
+  tests/test_prepare_response_contract.py \
+  tests/test_environmental_provider.py -q
 ```
 
-## Verified through actual testing
+Some tests intentionally use deterministic fixtures or monkeypatching to verify contracts without fabricating production sensor evidence.
 
-- `ocean_wind_loader.py`: parsing logic checked against Open-Meteo's own
-  documented example JSON response — passed.
-- `drift_simulation.py`: three physics self-tests — pure northward current
-  correctly places origin to the south, pure eastward current correctly
-  places origin to the west, wind has a real but appropriately small
-  (3%-scale) effect relative to current. All passed.
+## Repository layout
 
-## Honest limitations (say these in the pitch, don't hide them)
-- Assumes current/wind conditions were roughly constant during the
-  backward window — real conditions vary hour to hour. A more
-  sophisticated version would use the actual historical time series for
-  each backward step instead of one snapshot.
-- Doesn't model oil weathering (evaporation, emulsification) which
-  changes real drift behavior over time.
-- Still explicitly a "simplified" simulation, as the original task asked
-  for — not a claim of GNOME/OSERIT-grade accuracy, only similarity in
-  general approach.
-- I could not test the live network calls to Open-Meteo myself (not
-  reachable from my sandbox) — the parsing logic is verified against their
-  real documented example, but run it live on your machine to confirm.
-- Jurisdiction routing and real-spill validation (SIMI's other two tasks)
-  are NOT built yet — only the two most foundational pieces are done.
+```text
+app.py                         Canonical FastAPI entry point
+main/
+  imw_real_pipeline.py         End-to-end real pipeline
+  predict_and_classify.py      U-Net inference
+  shape_classifier.py          Explainable slick geometry classifier
+  ship_detection_module.py     YOLO hull detection + geolocation
+  ais_matcher.py               Real AIS loading/matching
+  ais_candidates.py            Multi-vessel candidate discovery
+  candidate_ranking.py         Transparent evidence ranking
+  vessel_history.py            AIS continuity/gap analysis
+  trajectory_evidence.py       Vessel trajectory evidence
+  vessel_association.py        Evidence association state
+  evidence_fusion.py           Evidence confidence fusion
+  environmental_provider.py    Live/modelled environment adapter
+  drift_analysis.py            Backward source-zone estimate
+  rf_corroboration.py          RF provider status boundary
+  incident_package.py          Canonical incident schema
+  incident_report.py           Report builder
+  incident_response.py         Operator-reviewed response draft
+  ...                          Supporting pipeline modules
+static/                        IMW dashboard
+training/                      Dataset preparation and model training
+tests/                         Contract and component tests
+.github/workflows/              CI
+```
+
+## What is not claimed
+
+IMW currently does **not** claim that an AIS gap proves a dark vessel intentionally disabled its transponder, that an environmental backtrack identifies a legally responsible source, or that an RF detection exists when no RF provider is connected. Those distinctions are part of the system's evidence model and should remain visible in the SIH demonstration.
+
+## SIH pitch focus
+
+The strongest software contribution is the chain from **independent SAR physical-hull evidence → time/space AIS correlation → vessel-history/trajectory analysis → environmental corroboration → auditable incident package → operator-reviewed response**. The system is designed to make each evidence source inspectable instead of collapsing uncertain signals into a fabricated certainty score.
