@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - "phase-2/imw-real-pipeline"
+      - "phase-2/imw-drift-evidence"
+      - "phase-2/imw-live-environment-v4"
   pull_request:
 
 jobs:
@@ -19,5 +21,13 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
           pip install pytest
-      - name: Run IMW tests
-        run: python -m pytest tests/test_rf_corroboration.py tests/test_incident_package.py tests/test_imw_e2e_contract.py -q
+      - name: Run IMW contract and evidence tests
+        run: >-
+          python -m pytest
+          tests/test_rf_corroboration.py
+          tests/test_incident_package.py
+          tests/test_imw_e2e_contract.py
+          tests/test_api_surface.py
+          tests/test_drift_analysis.py
+          tests/test_environmental_provider.py
+          -q
