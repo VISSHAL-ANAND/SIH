@@ -12,7 +12,7 @@ from .predict_and_classify import load_model, predict_and_classify, predict_mask
 from .ship_detection_module import detect_hulls, _try_extract_timestamp
 from .ais_matcher import load_ais_data, match_all_hulls, assess_ais_coverage, AIS_CSV_PATH
 from .ais_candidates import find_ais_candidates
-from .geolocation import extract_geotiff_coords, compute_image_bounds
+from .geolocation import extract_geotiff_coords, compute_image_bounds, pixel_to_latlon
 from .vessel_history import analyze_vessel_history, history_to_dict
 from .vessel_association import score_vessel_association, association_to_dict
 from .trajectory_evidence import analyze_trajectory, trajectory_to_dict
@@ -77,13 +77,26 @@ def image_timestamp(path: str | Path) -> str:
 
 
 def geolocate_pixel(path: str | Path, x: float, y: float, center_lat: float | None = None, center_lon: float | None = None):
+    """Return component coordinates with an explicit accuracy status.
+
+    GeoTIFFs use their actual affine transform and CRS. Plain images have no
+    intrinsic georeference, so a caller-supplied center plus assumed 10 m GSD
+    is used only as an estimate; it is never presented as precise geolocation.
+    """
     geo = extract_geotiff_coords(path, x, y)
     if geo is not None:
-        return geo[0], geo[1], "GeoTIFF metadata"
+        return geo[0], geo[1], "REAL_GEOTIFF_PIXEL_CENTER"
     if center_lat is not None and center_lon is not None:
-        bounds = compute_image_bounds(center_lat, center_lon)
-        lat, lon = bounds["centroid"]
-        return float(lat), float(lon), "user-supplied image center"
+        try:
+            with Image.open(path) as image:
+                width_px, height_px = image.size
+        except Exception:
+            width_px, height_px = 512, 512
+        lat, lon = pixel_to_latlon(
+            x, y, float(center_lat), float(center_lon),
+            width_px=width_px, height_px=height_px, meters_per_pixel=10.0,
+        )
+        return float(lat), float(lon), "ESTIMATED_USER_CENTER_PLUS_10M_GSD"
     return None
 
 
@@ -139,7 +152,6 @@ def _parse_timestamp(value: str | datetime) -> datetime:
 
 
 def _candidate_evidence(hull: dict, candidate: dict, coverage, ais_df, detection_time: datetime) -> dict:
-    """Build one normalized observed-candidate record; never infer responsibility."""
     mmsi = candidate.get("mmsi")
     history = trajectory = None
     if mmsi:
@@ -255,10 +267,5 @@ def run_real_pipeline(image_path: str | Path, center_lat: float | None = None, c
     )
     return {
         "incident": incident_to_dict(package),
-        "pipeline": {"status": "completed", "data_integrity": "REAL_ONLY", "stages": ["SAR", "SLICK_SEGMENTATION", "GEOLOCATION", "HULL_DETECTION", "AIS_CORRELATION", "MULTI_VESSEL_CANDIDATE_SEARCH", "CANDIDATE_RANKING", "SPILL_VESSEL_GRAPH", "INCIDENT_PACKAGING"], "inference_mode": inference_mode},
-        "sar": {"filename": path.name, "acquisition_timestamp": timestamp, "georeferenced": path.suffix.lower() in {".tif", ".tiff"}, "inference_mode": inference_mode},
-        "slicks": {"count": len(components), "linear_count": slick["num_linear"], "blob_count": slick["num_blob"], "components": components},
-        "hulls": {"count": len(hulls), "georeferenced_count": len(georef_hulls), "detections": hulls}, "drift": drift,
-        "ais": {"source_status": ais_source_status, "matches": ais_matches, "ranked_candidates": ranked_candidates, "vessel_graph": vessel_graph, "interpretation": "AIS correlation is anchored to the SAR acquisition time. Multiple observed MMSIs are retained for investigation; absence of an MMSI does not by itself establish an AIS shutdown."},
-        "rf": rf_result,
+        "pipeline": {"status": "completed", "data_source": "REAL_SAR_PIPELINE", "inference_mode": inference_mode, "ais_source_status": ais_source_status},
     }
