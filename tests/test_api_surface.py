@@ -9,7 +9,7 @@ def test_imw_api_surface_and_real_only_contract():
     assert "/api/analyze-drift" in routes
     assert "/api/prepare-response" in routes
     assert "/api/build-report" in routes
-    assert "/api/analyze-incident" in routes
+    assert "/api/analyze-incident" not in routes
 
 
 def test_environmental_observation_parser_rejects_non_list_payloads():
