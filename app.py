@@ -43,6 +43,8 @@ from physics import fetch_open_meteo_environment, simulate_backward_drift_trajec
 from sensor_fusion import correlate_hull_with_ais
 from main.imw_real_pipeline import run_real_pipeline
 from main.incident_report import build_incident_report
+from main.drift_analysis import enrich_incident_with_drift, drift_to_dict, estimate_source_zone
+from main.environmental_provider import OpenMeteoEnvironmentalProvider
 
 app = FastAPI(
     title="Indo Marine Watch (IMW)",
@@ -94,7 +96,6 @@ class BuildReportRequest(BaseModel):
 
 
 def _parse_environmental_observations(raw: Optional[str]) -> List[Dict[str, Any]]:
-    """Parse caller-supplied environmental evidence without inventing values."""
     if not raw:
         return []
     try:
@@ -106,18 +107,67 @@ def _parse_environmental_observations(raw: Optional[str]) -> List[Dict[str, Any]
     return value
 
 
+def _incident_spill_anchor(incident: Dict[str, Any]) -> tuple[float | None, float | None, str | None]:
+    spill = incident.get("spill") or {}
+    components = spill.get("components") or []
+    location = next((c.get("geolocation") for c in components if c.get("geolocation")), None)
+    detection = incident.get("detection") or {}
+    return (location.get("lat") if location else None, location.get("lon") if location else None, detection.get("timestamp"))
+
+
+def _attach_live_environment(result: Dict[str, Any]) -> Dict[str, Any]:
+    incident = result.get("incident")
+    if not isinstance(incident, dict):
+        return result
+    lat, lon, timestamp = _incident_spill_anchor(incident)
+    if lat is None or lon is None or not timestamp:
+        result["environmental"] = {
+            "status": "NOT_AVAILABLE",
+            "provider": "Open-Meteo Marine + Forecast API",
+            "observation_count": 0,
+            "reason": "A real georeferenced spill location and detection timestamp are required before environmental retrieval.",
+        }
+        return result
+    try:
+        detection_time = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+        rows = OpenMeteoEnvironmentalProvider().get_observations(lat, lon, detection_time, window_hours=3)
+        enriched = enrich_incident_with_drift(incident, rows)
+        result["incident"] = enriched
+        result["drift"] = enriched.get("drift")
+        result["environmental"] = {
+            **(enriched.get("environmental") or {}),
+            "provider": "Open-Meteo Marine + Forecast API",
+            "source_status": "REAL_MODELLED_DATA",
+            "observation_count": len(rows),
+        }
+    except Exception as exc:
+        result["drift"] = drift_to_dict(estimate_source_zone(lat, lon, timestamp, []))
+        result["environmental"] = {
+            "status": "UNAVAILABLE",
+            "provider": "Open-Meteo Marine + Forecast API",
+            "source_status": "PROVIDER_ERROR",
+            "observation_count": 0,
+            "reason": f"Environmental provider unavailable: {type(exc).__name__}: {exc}",
+        }
+        if isinstance(result.get("incident"), dict):
+            result["incident"]["drift"] = result["drift"]
+            result["incident"]["environmental"] = result["environmental"]
+    return result
+
+
 @app.post("/api/process-sar")
 async def process_sar(
     file: UploadFile = File(...),
     center_lat: Optional[float] = Form(None),
     center_lon: Optional[float] = Form(None),
     environmental_observations_json: Optional[str] = Form(None),
+    use_live_environment: bool = Form(True),
 ):
     """Canonical IMW SAR endpoint using the real-only pipeline.
 
-    Environmental observations are optional caller-supplied evidence. When
-    omitted, the pipeline reports drift evidence as NOT_AVAILABLE rather than
-    fabricating environmental conditions.
+    By default the endpoint attempts live environmental retrieval from Open-Meteo
+    after SAR geolocation. A provider failure becomes UNAVAILABLE; no synthetic
+    current/wind values are ever substituted.
     """
     t_start = time.perf_counter()
     safe_name = Path(file.filename or "upload.png").name
@@ -125,13 +175,9 @@ async def process_sar(
     file_path.write_bytes(await file.read())
     observations = _parse_environmental_observations(environmental_observations_json)
     try:
-        result = run_real_pipeline(
-            file_path,
-            center_lat=center_lat,
-            center_lon=center_lon,
-            use_ais=True,
-            environmental_observations=observations,
-        )
+        result = run_real_pipeline(file_path, center_lat=center_lat, center_lon=center_lon, use_ais=True, environmental_observations=observations)
+        if not observations and use_live_environment:
+            result = _attach_live_environment(result)
         incident_id = result.get("incident", {}).get("incident_id") or f"IMW-{uuid.uuid4().hex[:8].upper()}-2026"
         result["incident_id"] = incident_id
         if isinstance(result.get("incident"), dict):
@@ -155,79 +201,59 @@ async def process_sar(
 
 @app.post("/api/analyze-traffic")
 async def analyze_traffic(request: AnalyzeTrafficRequest) -> Dict[str, Any]:
-    """Return only real AIS correlation metadata; RF is never fabricated."""
     from main.ais_matcher import AIS_CSV_PATH, load_ais_data, assess_ais_coverage, match_hull_to_ais
     ais_path = Path(AIS_CSV_PATH)
     if not ais_path.exists():
         return {"status": "success", "data_integrity": "REAL_ONLY", "ais_status": "NO_AIS_COVERAGE", "is_dark_vessel": False,
                 "rf_intercept": {"status": "NOT_IMPLEMENTED"}, "ais_track": [], "surrounding_traffic": [],
                 "attribution_reason": "Configured AIS source is unavailable; no vessel attribution is made."}
-
     ais_df = load_ais_data(str(ais_path))
     capture_time = (datetime.fromisoformat(request.capture_time.replace("Z", "+00:00")).replace(tzinfo=None)
                     if request.capture_time else datetime.now(timezone.utc).replace(tzinfo=None))
     coverage = assess_ais_coverage(ais_df, request.hull_lat, request.hull_lon, capture_time)
     match = match_hull_to_ais(request.hull_lat, request.hull_lon, capture_time, ais_df, hull_id=0)
     status = "AIS_MATCHED" if match.has_ais_match else coverage.status
-    return {
-        "status": "success", "data_integrity": "REAL_ONLY", "ais_status": status,
-        "is_dark_vessel": bool(status == "AIS_GAP"),
-        "suspect_vessel": {"name": match.matched_vessel_name or "UNIDENTIFIED", "mmsi": match.matched_mmsi or "---",
-                           "flag": "UNKNOWN", "type": "AIS-correlated vessel" if match.has_ais_match else "Unresolved SAR hull",
-                           "coordinates": [request.hull_lat, request.hull_lon], "threat_score": match.suspicion_score},
-        "rf_intercept": {"status": "NOT_IMPLEMENTED", "match": False, "signature": None, "lock_coordinates": None},
-        "ais_track": [], "ais_blackout_point": None, "surrounding_traffic": [],
-        "attribution_reason": coverage.reason if not match.has_ais_match else match.reason,
-        "ais_match": {"matched_mmsi": match.matched_mmsi, "matched_vessel_name": match.matched_vessel_name,
-                      "distance_km": match.distance_km, "time_diff_hours": match.time_diff_hours,
-                      "suspicion_score": match.suspicion_score},
-        "coverage": {"status": coverage.status, "records_in_time_window": coverage.records_in_time_window,
-                     "nearby_records": coverage.nearby_records, "confidence": coverage.coverage_confidence,
-                     "reason": coverage.reason},
-    }
+    return {"status": "success", "data_integrity": "REAL_ONLY", "ais_status": status,
+            "is_dark_vessel": bool(status == "AIS_GAP"),
+            "suspect_vessel": {"name": match.matched_vessel_name or "UNIDENTIFIED", "mmsi": match.matched_mmsi or "---",
+                               "flag": "UNKNOWN", "type": "AIS-correlated vessel" if match.has_ais_match else "Unresolved SAR hull",
+                               "coordinates": [request.hull_lat, request.hull_lon], "threat_score": match.suspicion_score},
+            "rf_intercept": {"status": "NOT_IMPLEMENTED", "match": False, "signature": None, "lock_coordinates": None},
+            "ais_track": [], "ais_blackout_point": None, "surrounding_traffic": [],
+            "attribution_reason": coverage.reason if not match.has_ais_match else match.reason,
+            "ais_match": {"matched_mmsi": match.matched_mmsi, "matched_vessel_name": match.matched_vessel_name,
+                          "distance_km": match.distance_km, "time_diff_hours": match.time_diff_hours,
+                          "suspicion_score": match.suspicion_score},
+            "coverage": {"status": coverage.status, "records_in_time_window": coverage.records_in_time_window,
+                         "nearby_records": coverage.nearby_records, "confidence": coverage.coverage_confidence,
+                         "reason": coverage.reason}}
 
 
 @app.post("/api/analyze-drift")
 async def analyze_drift(request: DriftAnalysisRequest) -> Dict[str, Any]:
-    """Attach transparent environmental drift evidence to an incident.
-
-    Environmental observations must be supplied by the caller. The endpoint
-    never fabricates currents, winds, source coordinates, or vessel attribution.
-    """
-    from main.drift_analysis import enrich_incident_with_drift
-
     try:
-        return enrich_incident_with_drift(
-            request.incident,
-            request.observations,
-            windage=request.windage,
-            uncertainty_km=request.uncertainty_km,
-        )
+        return enrich_incident_with_drift(request.incident, request.observations, windage=request.windage, uncertainty_km=request.uncertainty_km)
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=f"Invalid drift input: {exc}")
 
 
 @app.post("/api/prepare-response")
 async def prepare_response(request: PrepareResponseRequest) -> Dict[str, Any]:
-    """Create a reviewable response draft; never transmit automatically."""
     timestamp = datetime.now(timezone.utc).isoformat()
     response_id = f"IMW-RESPONSE-{uuid.uuid4().hex[:8].upper()}"
-    return {
-        "status": "DRAFT_REQUIRES_OPERATOR_CONFIRMATION", "response_id": response_id, "timestamp": timestamp,
-        "recipient": request.recipient or "Indian Coast Guard — operator to confirm", "incident_id": request.incident_id,
-        "urgency": "HIGH" if request.threat_score >= 0.8 else "REVIEW",
-        "payload_preview": {"incident_id": request.incident_id, "slick_centroid": request.slick_centroid,
-                            "spill_area_sq_m": request.spill_area_sq_m, "candidate_vessel": request.suspect_vessel,
-                            "threat_score": request.threat_score, "evidence_summary": request.evidence_summary},
-        "operator_confirmation": {"required": True, "confirmed": False, "confirmed_by": None, "confirmed_at": None},
-        "transmission": {"status": "NOT_SENT", "sent_at": None},
-        "notice": "Draft only. Verify evidence and recipient details before any official transmission.",
-    }
+    return {"status": "DRAFT_REQUIRES_OPERATOR_CONFIRMATION", "response_id": response_id, "timestamp": timestamp,
+            "recipient": request.recipient or "Indian Coast Guard — operator to confirm", "incident_id": request.incident_id,
+            "urgency": "HIGH" if request.threat_score >= 0.8 else "REVIEW",
+            "payload_preview": {"incident_id": request.incident_id, "slick_centroid": request.slick_centroid,
+                                "spill_area_sq_m": request.spill_area_sq_m, "candidate_vessel": request.suspect_vessel,
+                                "threat_score": request.threat_score, "evidence_summary": request.evidence_summary},
+            "operator_confirmation": {"required": True, "confirmed": False, "confirmed_by": None, "confirmed_at": None},
+            "transmission": {"status": "NOT_SENT", "sent_at": None},
+            "notice": "Draft only. Verify evidence and recipient details before any official transmission."}
 
 
 @app.post("/api/build-report")
 async def build_report(request: BuildReportRequest) -> Dict[str, Any]:
-    """Build the exportable report from the same canonical incident evidence package."""
     if not request.incident.get("incident_id"):
         raise HTTPException(status_code=422, detail="incident.incident_id is required")
     return build_incident_report(request.incident, request.response_draft)
@@ -235,7 +261,6 @@ async def build_report(request: BuildReportRequest) -> Dict[str, Any]:
 
 @app.post("/api/analyze-incident")
 async def analyze_incident(request: AnalyzeIncidentRequest) -> Dict[str, Any]:
-    """Legacy single-call pipeline retained for backward compatibility."""
     t_start = time.perf_counter()
     slick_lat, slick_lon = 9.3764, 75.9758
     kerala_env_lat, kerala_env_lon = 9.3500, 76.0800
@@ -246,16 +271,13 @@ async def analyze_incident(request: AnalyzeIncidentRequest) -> Dict[str, Any]:
     hull_lat, hull_lon = hull_res["coordinates"]
     fusion_res = correlate_hull_with_ais(hull_lat=hull_lat, hull_lon=hull_lon, tolerance_km=5.0)
     incident_id = f"INCIDENT-{request.scenario.upper().replace('_', '-')}-2026"
-    return {"status": "success", "incident_id": incident_id,
-            "pipeline_latency_ms": round((time.perf_counter() - t_start) * 1000, 2),
+    return {"status": "success", "incident_id": incident_id, "pipeline_latency_ms": round((time.perf_counter() - t_start) * 1000, 2),
             "target_vessel_coordinates": fusion_res["target_vessel_coordinates"], "slick_centroid": [slick_lat, slick_lon],
             "origin_coordinates": drift_res["origin_coordinates"], "drift_distance_km": drift_res["drift_distance_km"],
-            "hours_back": request.hours_back, "spill_area_sq_m": sar_res["spill_area_sq_m"],
-            "shape_classification": sar_res["shape_classification"],
+            "hours_back": request.hours_back, "spill_area_sq_m": sar_res["spill_area_sq_m"], "shape_classification": sar_res["shape_classification"],
             "sensor_fusion": {"ais_status": fusion_res["ais_status"], "is_dark_vessel": fusion_res["is_dark_vessel"],
                               "rf_intercept_match": fusion_res["rf_intercept_match"], "rf_signature": fusion_res["rf_signature"],
-                              "threat_score": fusion_res["threat_score"], "attribution_reason": fusion_res["attribution_reason"]},
-            "environment": env_params}
+                              "threat_score": fusion_res["threat_score"], "attribution_reason": fusion_res["attribution_reason"]}, "environment": env_params}
 
 
 @app.get("/")
