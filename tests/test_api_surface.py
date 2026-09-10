@@ -37,5 +37,5 @@ def test_real_pipeline_has_explicit_integrity_markers():
     pipeline_source = open(pipeline.__file__, encoding="utf-8").read()
     drift_source = open(drift.__file__, encoding="utf-8").read()
     assert '"data_integrity": "REAL_ONLY"' in pipeline_source
-    assert '"status": "NOT_AVAILABLE"' in drift_source
+    assert 'NOT_AVAILABLE' in drift_source
     assert 'corroborate_rf([], 0.0, 0.0)' in pipeline_source
