@@ -14,7 +14,7 @@ from .ship_detection_module import detect_hulls, _try_extract_timestamp
 from .ais_matcher import load_ais_data, match_all_hulls, assess_ais_coverage, AIS_CSV_PATH
 from .ais_candidates import find_ais_candidates
 from .gfw_ais_provider import GFWAPIError, GFWAISProvider
-from .geolocation import extract_geotiff_coords, pixel_to_latlon
+from .geolocation import extract_geotiff_coords, extract_sentinel1_coords, pixel_to_latlon
 from .vessel_history import analyze_vessel_history, history_to_dict
 from .vessel_association import score_vessel_association, association_to_dict
 from .trajectory_evidence import analyze_trajectory, trajectory_to_dict
@@ -77,9 +77,15 @@ def image_timestamp(path: str | Path) -> str:
 
 
 def geolocate_pixel(path: str | Path, x: float, y: float, center_lat: float | None = None, center_lon: float | None = None):
+    """Prefer real GeoTIFF or Sentinel-1 SAFE geolocation before any estimate."""
     geo = extract_geotiff_coords(path, x, y)
     if geo is not None:
         return geo[0], geo[1], "REAL_GEOTIFF_PIXEL_CENTER"
+
+    sentinel_geo = extract_sentinel1_coords(path, x, y)
+    if sentinel_geo is not None:
+        return sentinel_geo[0], sentinel_geo[1], "REAL_SENTINEL1_ANNOTATION_GRID"
+
     if center_lat is not None and center_lon is not None:
         try:
             with Image.open(path) as image:
@@ -170,7 +176,6 @@ def _load_ais_source(georef_hulls: list[dict], detection_time: datetime):
     """Choose GFW for current authorized access, else the documented local replay source."""
     if not georef_hulls:
         return None, "NO_GEOREFERENCED_HULLS", None
-
     gfw_token = os.getenv("GFW_API_ACCESS_TOKEN")
     gfw_error = None
     if gfw_token:
@@ -179,11 +184,9 @@ def _load_ais_source(georef_hulls: list[dict], detection_time: datetime):
             return gfw_df, "REAL_GFW_AIS_PRESENCE", None
         except GFWAPIError as exc:
             gfw_error = str(exc)
-
     if Path(AIS_CSV_PATH).exists():
         fallback_status = "REAL_MARINECADASTRE_REPLAY" if not gfw_error else "REAL_MARINECADASTRE_FALLBACK"
         return load_ais_data(AIS_CSV_PATH), fallback_status, gfw_error
-
     return None, "UNAVAILABLE", gfw_error
 
 
@@ -207,7 +210,6 @@ def run_real_pipeline(image_path: str | Path, center_lat: float | None = None, c
     vessel_graph = {"status": "NO_AIS_CANDIDATES", "nodes": [], "edges": []}
     ais_source_status = "NOT_REQUESTED"
     ais_source_detail = None
-
     if use_ais:
         ais_df, ais_source_status, ais_source_detail = _load_ais_source(georef_hulls, detection_time)
         if ais_df is not None:
@@ -230,12 +232,10 @@ def run_real_pipeline(image_path: str | Path, center_lat: float | None = None, c
             ranked_candidates = [_enrich_ranked_candidate(ranking_by_key.get((c.get("hull_id"), c.get("matched_mmsi"))), c) for c in all_candidates]
             ais_matches = ranked_candidates
             vessel_graph = build_spill_vessel_graph(ranked_candidates)
-
     primary_location = next((c.get("geolocation") for c in components if c.get("geolocation")), None)
     drift_result = estimate_source_zone(primary_location.get("lat") if primary_location else None, primary_location.get("lon") if primary_location else None, timestamp, environmental_observations, windage=windage, uncertainty_km=drift_uncertainty_km)
     drift = drift_to_dict(drift_result)
     environmental = {"status": "AVAILABLE" if environmental_observations else "NOT_AVAILABLE", "observation_count": len(environmental_observations or []), "reason": drift_result.reason}
-
     candidate_objects = [CandidateVessel(mmsi=m["matched_mmsi"], vessel_name=m.get("matched_vessel_name"), association=m.get("association") or {}, history=m.get("vessel_history"), trajectory=m.get("trajectory"), ranking=m.get("ranking")) for m in ais_matches if m.get("matched_mmsi")]
     rf_result = corroborate_rf([], 0.0, 0.0)
     package = build_incident_package(incident_id=build_incident_id(detection_time), detection={"timestamp": timestamp, "source": "SAR_ANALYSIS"}, geolocation={"hulls": georef_hulls}, spill={"count": len(components), "components": components, "inference_mode": inference_mode}, ais={"source_status": ais_source_status, "source_detail": ais_source_detail, "matches": ais_matches, "candidates": ranked_candidates, "vessel_graph": vessel_graph}, environmental=environmental, drift=drift, rf=rf_result, candidates=candidate_objects)
