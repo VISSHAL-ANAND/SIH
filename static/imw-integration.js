@@ -47,6 +47,7 @@
       const candidates = Array.isArray(incident.candidates) ? incident.candidates : [];
       const first = candidates[0];
       if (first && window.renderEvidenceMatrix) window.renderEvidenceMatrix(first);
+      if (first && window.renderCandidateInvestigationPanel) window.renderCandidateInvestigationPanel(first);
       if (first && window.openVesselInvestigation) window.openVesselInvestigation(first);
       if (window.renderIncidentResponse && window.buildResponseDraft) {
         const draft = window.buildResponseDraft(incident);
