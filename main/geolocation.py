@@ -12,6 +12,7 @@ coordinates are therefore marked as estimated by the caller.
 """
 
 import math
+import os
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Tuple, Optional, Dict, Any
@@ -46,11 +47,19 @@ def extract_geotiff_coords(geotiff_path: str | Path, px: float = 0.0, py: float 
 
 
 def _find_sentinel1_annotation_xml(measurement_path: str | Path) -> Optional[Path]:
-    """Find the matching Sentinel-1 GRD annotation XML for a measurement TIFF."""
+    """Find the matching Sentinel-1 GRD annotation XML for a measurement TIFF.
+
+    First searches the TIFF's own SAFE ancestors. For the browser upload
+    path, the API removes the temporary TIFF after processing, so an operator
+    may set IMW_SENTINEL1_SAFE_ROOT to the local SAFE product root; the same
+    original measurement filename is then resolved against its annotation/
+    directory without copying or modifying the SAFE product.
+    """
     path = Path(measurement_path)
     if path.suffix.lower() not in {".tif", ".tiff"}:
         return None
     stem = path.stem.lower()
+
     for ancestor in path.parents:
         annotation_dir = ancestor / "annotation"
         if not annotation_dir.is_dir():
@@ -58,6 +67,18 @@ def _find_sentinel1_annotation_xml(measurement_path: str | Path) -> Optional[Pat
         exact = annotation_dir / f"{stem}.xml"
         if exact.is_file():
             return exact
+
+    safe_root = os.getenv("IMW_SENTINEL1_SAFE_ROOT")
+    if safe_root:
+        root = Path(safe_root)
+        if root.is_dir():
+            direct = root / "annotation" / f"{stem}.xml"
+            if direct.is_file():
+                return direct
+            for annotation_dir in root.rglob("annotation"):
+                candidate = annotation_dir / f"{stem}.xml"
+                if candidate.is_file():
+                    return candidate
     return None
 
 
