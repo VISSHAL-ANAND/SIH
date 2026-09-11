@@ -134,7 +134,7 @@ def analyze_ais_gaps(
         else:
             status = "GAP_REQUIRES_COVERAGE_REVIEW"
             strength = 0.35
-            reason = "A time interval exceeds the configured expected AIS observation interval, but source coverage is not confirmed; review provider/receiver coverage before interpretation."
+            reason = "A time interval exceeds the configured expected AIS observation interval, but source coverage is not confirmed; the gap does not establish intentional shutdown or responsibility, so review provider/receiver coverage before interpretation."
     else:
         status = "AIS_CONTINUITY_OBSERVED"
         strength = 0.9 if coverage_available is True else 0.75
