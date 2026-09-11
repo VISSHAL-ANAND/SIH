@@ -15,6 +15,7 @@ def build_incident_report(incident: dict, response_draft: dict | None = None) ->
         "geolocation": incident.get("geolocation") or {},
         "spill": incident.get("spill") or {},
         "ais": incident.get("ais") or {},
+        "environmental": incident.get("environmental") or {"status": "NOT_AVAILABLE"},
         "candidates": incident.get("candidates") or [],
         "drift": incident.get("drift") or {},
         "rf": incident.get("rf") or {},
