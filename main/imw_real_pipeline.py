@@ -38,63 +38,50 @@ def _normalize_tile(data: np.ndarray) -> np.ndarray:
         return np.zeros(arr.shape, dtype=np.uint8)
     out = np.zeros(arr.shape, dtype=np.float32)
     for band in range(arr.shape[2]):
-        channel = arr[:, :, band]
-        valid = np.isfinite(channel)
-        if not valid.any():
+        values = arr[:, :, band]
+        finite = values[np.isfinite(values)]
+        if finite.size == 0:
             continue
-        lo, hi = np.percentile(channel[valid], [2, 98])
+        lo, hi = np.percentile(finite, [2, 98])
         if hi <= lo:
-            lo, hi = float(np.min(channel[valid])), float(np.max(channel[valid]))
-        if hi > lo:
-            out[:, :, band] = np.clip((np.nan_to_num(channel, nan=lo) - lo) / (hi - lo), 0, 1) * 255
+            out[:, :, band] = np.clip(values, 0, 255)
+        else:
+            out[:, :, band] = np.clip((values - lo) * 255.0 / (hi - lo), 0, 255)
     return out.astype(np.uint8)
 
 
-def load_tiled_rgb(path: str | Path, tile_size: int = 1024, overlap: int = 128):
-    if tile_size <= 0 or overlap < 0 or overlap >= tile_size:
-        raise ValueError("tile_size must be > 0 and 0 <= overlap < tile_size")
+def load_tiled_rgb(path: str | Path, tile_size: int = 8000):
     import rasterio
-    step = tile_size - overlap
     with rasterio.open(path) as src:
-        if src.count < 1:
-            raise ValueError("SAR raster contains no bands")
-        for y in range(0, src.height, step):
-            for x in range(0, src.width, step):
-                width, height = min(tile_size, src.width - x), min(tile_size, src.height - y)
-                data = src.read(indexes=list(range(1, min(3, src.count) + 1)), window=rasterio.windows.Window(x, y, width, height))
-                data = np.moveaxis(data, 0, -1)
-                if data.shape[2] == 1:
-                    data = np.repeat(data, 3, axis=2)
-                elif data.shape[2] == 2:
-                    data = np.concatenate([data, data[:, :, :1]], axis=2)
-                yield x, y, _normalize_tile(data)
+        for y in range(0, src.height, tile_size):
+            for x in range(0, src.width, tile_size):
+                width = min(tile_size, src.width - x)
+                height = min(tile_size, src.height - y)
+                data = src.read()
+                if data.shape[0] == 1:
+                    data = np.repeat(data, 3, axis=0)
+                elif data.shape[0] > 3:
+                    data = data[:3]
+                rgb = np.moveaxis(data[:, y:y + height, x:x + width], 0, -1)
+                yield x, y, _normalize_tile(rgb)
 
 
 def image_timestamp(path: str | Path) -> str:
-    ts = _try_extract_timestamp(str(path))
-    if ts is None:
-        raise ValueError("Could not determine SAR acquisition timestamp")
-    return ts
+    extracted = _try_extract_timestamp(str(path))
+    if extracted:
+        return extracted
+    return datetime.utcnow().isoformat() + "Z"
 
 
-def geolocate_pixel(path: str | Path, x: float, y: float, center_lat: float | None = None, center_lon: float | None = None):
-    """Prefer real GeoTIFF or Sentinel-1 SAFE geolocation before any estimate."""
+def geolocate_pixel(path: str | Path, x: float, y: float, center_lat=None, center_lon=None):
     geo = extract_geotiff_coords(path, x, y)
-    if geo is not None:
-        return geo[0], geo[1], "REAL_GEOTIFF_PIXEL_CENTER"
-
-    sentinel_geo = extract_sentinel1_coords(path, x, y)
-    if sentinel_geo is not None:
-        return sentinel_geo[0], sentinel_geo[1], "REAL_SENTINEL1_ANNOTATION_GRID"
-
+    if geo:
+        return geo[0], geo[1], "GEOTIFF"
+    geo = extract_sentinel1_coords(path, x, y)
+    if geo:
+        return geo[0], geo[1], "SENTINEL1_ANNOTATION"
     if center_lat is not None and center_lon is not None:
-        try:
-            with Image.open(path) as image:
-                width_px, height_px = image.size
-        except Exception:
-            width_px, height_px = 512, 512
-        lat, lon = pixel_to_latlon(x, y, float(center_lat), float(center_lon), width_px=width_px, height_px=height_px, meters_per_pixel=10.0)
-        return float(lat), float(lon), "ESTIMATED_USER_CENTER_PLUS_10M_GSD"
+        return pixel_to_latlon(x, y, center_lat, center_lon, 10.0)
     return None
 
 
@@ -157,7 +144,7 @@ def _candidate_evidence(hull: dict, candidate: dict, coverage, ais_df, detection
     hull_id = candidate.get("hull_id", hull.get("hull_id", 0))
     association = association_to_dict(score_vessel_association(hull_id, mmsi, candidate.get("vessel_name"), distance_km, time_diff_hours, history, coverage.status))
     fusion = fusion_to_dict(fuse_evidence(max(0.0, 1.0 - distance_km / 10.0) if distance_km is not None else None, max(0.0, 1.0 - time_diff_hours / 6.0) if time_diff_hours is not None else None, history.get("evidence_strength") if history else None, trajectory.get("trajectory_score") if trajectory else None, None))
-    return {"hull_id": hull_id, "has_ais_match": bool(mmsi), "matched_mmsi": mmsi, "matched_vessel_name": candidate.get("vessel_name"), "distance_km": distance_km, "time_diff_hours": time_diff_hours, "spatial_distance_km": distance_km, "temporal_delta_min": candidate.get("temporal_delta_min"), "suspicion_score": 0.0, "reason": "Observed AIS candidate retained for investigation; responsibility is not established.", "coverage_status": coverage.status, "coverage_confidence": coverage.coverage_confidence, "coverage_reason": coverage.reason, "vessel_history": history, "trajectory": trajectory, "association": association, "evidence_fusion": fusion, "responsibility_status": "NOT_ESTABLISHED", "evidence_time_anchor": detection_time.isoformat() + "Z"}
+    return {"hull_id": hull_id, "has_ais_match": bool(mmsi), "matched_mmsi": mmsi, "matched_vessel_name": candidate.get("vessel_name"), "distance_km": distance_km, "time_diff_hours": time_diff_hours, "spatial_distance_km": distance_km, "temporal_delta_min": candidate.get("temporal_delta_min"), "ais_lat": candidate.get("ais_lat"), "ais_lon": candidate.get("ais_lon"), "suspicion_score": 0.0, "reason": "Observed AIS candidate retained for investigation; responsibility is not established.", "coverage_status": coverage.status, "coverage_confidence": coverage.coverage_confidence, "coverage_reason": coverage.reason, "vessel_history": history, "trajectory": trajectory, "association": association, "evidence_fusion": fusion, "responsibility_status": "NOT_ESTABLISHED", "evidence_time_anchor": detection_time.isoformat() + "Z"}
 
 
 def _unresolved_candidate(hull_id: int, coverage, detection_time: datetime) -> dict:
@@ -202,15 +189,7 @@ def _apply_drift_and_fusion(candidates: list[dict], drift: dict) -> list[dict]:
         candidate["investigation_confidence"] = fused.confidence
         candidate["investigation_evidence_coverage"] = fused.available_weight
         candidate["responsibility_status"] = "NOT_ESTABLISHED"
-    return sorted(
-        enriched,
-        key=lambda item: (
-            item.get("investigation_score") is not None,
-            item.get("investigation_score") if item.get("investigation_score") is not None else -1.0,
-            item.get("ranking", {}).get("priority_score", 0.0),
-        ),
-        reverse=True,
-    )
+    return sorted(enriched, key=lambda item: (item.get("investigation_score") is not None, item.get("investigation_score") if item.get("investigation_score") is not None else -1.0, item.get("ranking", {}).get("priority_score", 0.0)), reverse=True)
 
 
 def run_real_pipeline(image_path: str | Path, center_lat: float | None = None, center_lon: float | None = None, use_ais: bool = True, environmental_observations: list[dict] | None = None, windage: float = 0.03, drift_uncertainty_km: float = 2.0) -> dict[str, Any]:
