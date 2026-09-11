@@ -80,22 +80,20 @@ def _sentinel1_pixel_to_latlon(image_path: str, px: float, py: float):
 
 
 def _try_extract_timestamp(image_path: str):
-    """Extract SAR acquisition time from Sentinel-1 naming metadata only.
+    """Extract Sentinel-1 acquisition time from SAFE or measurement naming.
 
-    A filesystem modification time is deliberately not used as an acquisition
-    timestamp: it describes local file handling, not when the satellite image
-    was acquired. Returning None lets the caller explicitly mark acquisition
-    time as unavailable rather than silently contaminating AIS correlation.
+    SAFE/product names use underscore separators while measurement TIFF names
+    commonly use hyphens. Filesystem timestamps are deliberately never used.
     """
     name = Path(image_path).name
     patterns = [
-        r"(?P<start>\d{8}T\d{6})_(?P<end>\d{8}T\d{6})",
-        r"(?P<start>\d{8}T\d{6})",
+        r"(?P<start>\d{8}[Tt]\d{6})[-_](?:\d{8}[Tt]\d{6})",
+        r"(?P<start>\d{8}[Tt]\d{6})",
     ]
     for pattern in patterns:
         m = re.search(pattern, name)
         if m:
-            value = m.group("start")
+            value = m.group("start").upper()
             dt = datetime.strptime(value, "%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc)
             return dt.isoformat().replace("+00:00", "Z")
     return None
