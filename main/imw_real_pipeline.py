@@ -43,7 +43,8 @@ def _normalize_tile(data: np.ndarray) -> np.ndarray:
     return out.astype(np.uint8)
 
 
-def load_tiled_rgb(path: str | Path, tile_size: int = 8000):
+def load_tiled_rgb(path: str | Path, tile_size: int = 1536):
+    """Yield small Sentinel-1 RGB tiles so CPU inference stays within 16 GB RAM."""
     import rasterio
     with rasterio.open(path) as src:
         for y in range(0, src.height, tile_size):
@@ -137,10 +138,10 @@ def _run_slick_inference(path: Path, model):
     if path.suffix.lower() not in {".tif",".tiff"}: return predict_and_classify(model,load_rgb_image(path)),"FULL_IMAGE"
     import rasterio
     with rasterio.open(path) as src: height,width=src.height,src.width
-    mask_sum=np.zeros((height,width),dtype=np.float32); mask_count=np.zeros((height,width),dtype=np.uint16)
+    stitched=np.zeros((height,width),dtype=np.uint8)
     for x,y,tile in load_tiled_rgb(path):
-        mask=predict_mask(model,tile); h,w=mask.shape; mask_sum[y:y+h,x:x+w]+=mask; mask_count[y:y+h,x:x+w]+=1
-    stitched=(mask_sum>=np.maximum(mask_count,1)/2.0).astype(np.uint8)
+        mask=predict_mask(model,tile); h,w=mask.shape; stitched[y:y+h,x:x+w]=mask
+        del mask,tile
     from .shape_classifier import classify_slick_shape,components_to_dicts
     components=components_to_dicts(classify_slick_shape(stitched))
     return {"predicted_mask":stitched,"components":components,"num_slicks_detected":len(components),"num_linear":sum(c["shape_class"]=="linear" for c in components),"num_blob":sum(c["shape_class"]=="blob" for c in components)},"TILED_GEOTIFF"
