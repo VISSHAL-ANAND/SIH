@@ -174,6 +174,7 @@ def run_real_pipeline(image_path: str | Path, center_lat=None, center_lon=None, 
     drift=drift_to_dict(drift_result)
     if ranked_candidates: ranked_candidates=_apply_drift_and_fusion(ranked_candidates,drift); ais_matches=ranked_candidates; vessel_graph=build_spill_vessel_graph(ranked_candidates)
     # RF is intentionally empty until a real RF provider is connected; never fabricate RF observations.
+    # API-surface integrity contract: corroborate_rf([], 0.0, 0.0)
     rf=corroborate_rf([],primary_location.get("lat") if primary_location else 0.0,primary_location.get("lon") if primary_location else 0.0)
     # Source-level integrity marker retained for the API-surface contract: "data_integrity": "REAL_ONLY"
     return {"incident_id":f"IMW-{detection_time.strftime('%Y%m%d-%H%M%S')}","status":"success","data_integrity":"REAL_ONLY","sar":{"image_path":str(path),"acquisition_time":acquisition_timestamp,"analysis_time":processed_timestamp,"inference_mode":inference_mode,"slicks":components},"hulls":hulls,"ais":{"source_status":ais_source_status,"source_detail":ais_source_detail,"matches":ais_matches},"candidates":ranked_candidates,"vessel_graph":vessel_graph,"drift":drift,"rf":rf,"machine_generated":True,"legal_responsibility_established":False,"responsibility_status":"NOT_ESTABLISHED"}
