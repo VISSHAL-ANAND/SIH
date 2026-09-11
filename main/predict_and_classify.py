@@ -43,13 +43,26 @@ def load_model():
 
 
 def predict_mask(model, image_rgb: np.ndarray) -> np.ndarray:
-    """image_rgb: (H, W, 3) uint8. Returns (H, W) binary mask, 1 = predicted oil."""
-    img = image_rgb.astype(np.float32) / 255.0
+    """image_rgb: (H, W, 3) uint8. Returns (H, W) binary mask, 1 = predicted oil.
+
+    Arbitrary SAR tiles are padded to the U-Net stride before inference and
+    cropped back afterwards. This keeps edge tiles valid without loading the
+    entire Sentinel-1 scene into RAM.
+    """
+    img = np.asarray(image_rgb, dtype=np.float32) / 255.0
+    h, w = img.shape[:2]
+    stride = 32
+    padded_h = ((h + stride - 1) // stride) * stride
+    padded_w = ((w + stride - 1) // stride) * stride
+    if padded_h != h or padded_w != w:
+        img = np.pad(img, ((0, padded_h - h), (0, padded_w - w), (0, 0)), mode="edge")
+
     img_t = torch.from_numpy(img).permute(2, 0, 1).unsqueeze(0).to(DEVICE)
-    with torch.no_grad():
+    with torch.inference_mode():
         logits = model(img_t)
-        pred = torch.argmax(logits, dim=1).squeeze(0).cpu().numpy()
-    return pred.astype(np.uint8)
+        pred = torch.argmax(logits, dim=1).squeeze(0).cpu().numpy().astype(np.uint8)
+    del logits, img_t
+    return pred[:h, :w]
 
 
 def predict_and_classify(model, image_rgb: np.ndarray) -> dict:
