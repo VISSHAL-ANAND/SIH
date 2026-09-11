@@ -7,8 +7,7 @@ establishes spill causation or legal responsibility.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
-from math import atan2, cos, radians, sin
+from datetime import datetime
 
 import pandas as pd
 
@@ -38,6 +37,7 @@ class VesselTrajectory:
     approaches_vicinity: bool
     status: str
     reason: str
+    responsibility_status: str = "NOT_ESTABLISHED"
 
 
 def _prepare_vessel(ais_df: pd.DataFrame, mmsi: str) -> pd.DataFrame:
@@ -119,8 +119,6 @@ def reconstruct_trajectory(
         start_distance = float(window.iloc[0]["distance_to_hull_km"])
         end_distance = float(window.iloc[-1]["distance_to_hull_km"])
 
-    # Use observed AIS points themselves for the vicinity test. We deliberately
-    # do not interpolate a crossing between sparse points as if it were observed.
     intersects = bool((window["distance_to_hull_km"] <= vicinity_km).any())
     approaches = bool(end_distance + 0.25 < start_distance) and not intersects
 
@@ -157,6 +155,7 @@ def reconstruct_trajectory(
         approaches_vicinity=approaches,
         status=status,
         reason=reason,
+        responsibility_status="NOT_ESTABLISHED",
     )
 
 
@@ -183,5 +182,5 @@ def trajectory_to_dict(result: VesselTrajectory) -> dict:
         "approaches_vicinity": result.approaches_vicinity,
         "status": result.status,
         "reason": result.reason,
-        "responsibility_status": "NOT_ESTABLISHED",
+        "responsibility_status": result.responsibility_status,
     }
