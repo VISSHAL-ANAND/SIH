@@ -39,6 +39,7 @@ from dataclasses import dataclass, asdict
 
 MIN_COMPONENT_AREA = 20        # pixels -- ignore specks smaller than this (noise, not slicks)
 LINEAR_THRESHOLD = 0.15        # eigenvalue ratio below this -> classified as linear
+MAX_PCA_POINTS = 100_000       # cap expensive PCA work for very large real-SAR components
 
 
 @dataclass
@@ -71,6 +72,33 @@ def _pca_elongation(ys: np.ndarray, xs: np.ndarray):
     return ratio, orientation
 
 
+def _component_coordinates(labels: np.ndarray, label_id: int, stats: np.ndarray):
+    """Return representative coordinates without repeatedly scanning a huge frame.
+
+    Real Sentinel-1 scenes can contain hundreds of millions of pixels. The old
+    implementation called ``np.where(labels == label_id)`` for every component,
+    forcing a full-frame scan and creating enormous temporary arrays. For large
+    components we instead inspect a strided view of that component's bounding
+    box, capped at MAX_PCA_POINTS. Small components still use every pixel.
+    """
+    x0 = int(stats[label_id, cv2.CC_STAT_LEFT])
+    y0 = int(stats[label_id, cv2.CC_STAT_TOP])
+    width = int(stats[label_id, cv2.CC_STAT_WIDTH])
+    height = int(stats[label_id, cv2.CC_STAT_HEIGHT])
+    area = int(stats[label_id, cv2.CC_STAT_AREA])
+
+    if width <= 0 or height <= 0:
+        return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int64)
+
+    bbox_pixels = width * height
+    step = max(1, int(np.ceil(np.sqrt(max(area, bbox_pixels) / MAX_PCA_POINTS))))
+
+    # Keep the operation bounded by sampling the component's bounding box.
+    crop = labels[y0:y0 + height:step, x0:x0 + width:step]
+    ys, xs = np.where(crop == label_id)
+    return ys.astype(np.int64) * step + y0, xs.astype(np.int64) * step + x0
+
+
 def classify_slick_shape(binary_mask: np.ndarray) -> list[SlickComponent]:
     """
     Takes a binary mask (H, W) with 1 = oil, 0 = background -- e.g. the
@@ -90,7 +118,9 @@ def classify_slick_shape(binary_mask: np.ndarray) -> list[SlickComponent]:
         if area < MIN_COMPONENT_AREA:
             continue
 
-        ys, xs = np.where(labels == label_id)
+        ys, xs = _component_coordinates(labels, label_id, stats)
+        if len(xs) < 2:
+            continue
         elongation_ratio, orientation = _pca_elongation(ys, xs)
         shape_class = "linear" if elongation_ratio < LINEAR_THRESHOLD else "blob"
         spill_area_sq_meters = float(area * 100.0)  # 10 m/pixel SAR resolution
@@ -100,7 +130,9 @@ def classify_slick_shape(binary_mask: np.ndarray) -> list[SlickComponent]:
         w = stats[label_id, cv2.CC_STAT_WIDTH]
         h = stats[label_id, cv2.CC_STAT_HEIGHT]
 
-        # corroborating signal: oriented bounding box aspect ratio
+        # Corroborating signal: oriented bounding box aspect ratio.
+        # Use the representative points for large components to avoid another
+        # full-resolution allocation while retaining the same geometry signal.
         points = np.stack([xs, ys], axis=1).astype(np.float32)
         rect = cv2.minAreaRect(points)
         (rw, rh) = rect[1]
