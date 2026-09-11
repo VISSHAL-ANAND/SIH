@@ -73,9 +73,10 @@ def rank_candidates(candidates: list[dict]) -> list[RankedCandidate]:
         trajectory = (c.get("trajectory") or {}).get("trajectory_score")
         gap = _gap_score(history, c)
 
-        # AIS gaps are deliberately limited to 12% of the ranking. They can
-        # increase investigation priority but can never dominate physical,
-        # temporal, history, or trajectory evidence.
+        # Fixed weights make an observed AIS gap additive evidence instead of
+        # penalising a candidate merely because gap evidence was previously
+        # absent. Missing evidence contributes zero; it is not treated as a
+        # negative finding. AIS gaps remain capped at 12% of the total score.
         values = [
             (0.30, spatial),
             (0.18, temporal),
@@ -85,7 +86,7 @@ def rank_candidates(candidates: list[dict]) -> list[RankedCandidate]:
         ]
         available = [(w, v) for w, v in values if v is not None]
         total_weight = sum(w for w, _ in available)
-        score = sum(w * _clamp(v) for w, v in available) / total_weight if total_weight else 0.0
+        score = sum(w * _clamp(v) for w, v in available)
 
         reasons = []
         if distance is not None:
