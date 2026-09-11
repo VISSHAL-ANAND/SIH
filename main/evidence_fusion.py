@@ -15,12 +15,15 @@ class EvidenceFusion:
     limitations: list[str]
 
 
+# Evidence weights sum to 1.0.  Spatial and drift carry the strongest
+# independent geographic signal; temporal, continuity, and trajectory provide
+# complementary vessel-association evidence.
 WEIGHTS = {
     "spatial": 0.25,
     "temporal": 0.15,
     "continuity": 0.15,
-    "trajectory": 0.20,
-    "drift": 0.25,
+    "trajectory": 0.15,
+    "drift": 0.30,
 }
 
 
