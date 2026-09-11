@@ -21,8 +21,9 @@ class EvidenceFusion:
     responsibility_status: str = "NOT_ESTABLISHED"
 
 
-# Fixed weights sum to 1.0. Missing evidence contributes zero to the score;
-# it does not change the weight of evidence that is actually observed.
+# Fixed evidence weights. Missing evidence is excluded from the denominator
+# used for the investigation-priority score; availability is reported
+# separately so incomplete data never masquerades as negative evidence.
 WEIGHTS = {
     "spatial": 0.25,
     "temporal": 0.15,
@@ -62,22 +63,35 @@ def fuse_evidence(
         "trajectory": trajectory,
         "drift": drift,
     }
-    available_weight = sum(WEIGHTS[k] for k, v in values.items() if v is not None)
-    if available_weight <= 0:
+    available = [(k, v) for k, v in values.items() if v is not None]
+    available_weight = sum(WEIGHTS[k] for k, _ in available)
+
+    if not available:
         return EvidenceFusion(
-            values, 0.0, None, "UNRESOLVED", "INSUFFICIENT_DATA", [],
+            values,
+            0.0,
+            None,
+            "UNRESOLVED",
+            "INSUFFICIENT_DATA",
+            [],
             ["No independent evidence is available."],
         )
 
-    # Fixed denominator keeps the score calibrated across candidates. A
-    # missing source is a limitation, not a negative observation.
+    # Renormalise only across evidence that actually exists. This answers the
+    # question "how strong is the evidence we have?" while available_weight
+    # independently answers "how much of the evidence model is covered?".
     score = sum(
-        WEIGHTS[k] * _clamp(v) for k, v in values.items() if v is not None
+        (WEIGHTS[k] / available_weight) * _clamp(v)
+        for k, v in available
     )
-    evidence = [f"{k}: {float(v):.3f}" for k, v in values.items() if v is not None]
-    limitations = [f"{k} evidence unavailable" for k, v in values.items() if v is None]
 
-    # Confidence measures evidence coverage separately from score strength.
+    evidence = [f"{k}: {float(v):.3f}" for k, v in available]
+    limitations = [
+        f"{k} evidence unavailable"
+        for k, v in values.items()
+        if v is None
+    ]
+
     if available_weight >= 0.75:
         confidence = "HIGH"
     elif available_weight >= 0.50:
