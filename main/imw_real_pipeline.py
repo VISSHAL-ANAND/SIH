@@ -18,12 +18,13 @@ from .geolocation import extract_geotiff_coords, extract_sentinel1_coords, pixel
 from .vessel_history import analyze_vessel_history, history_to_dict
 from .vessel_association import score_vessel_association, association_to_dict
 from .trajectory_evidence import analyze_trajectory, trajectory_to_dict
-from .evidence_fusion import fuse_evidence, fusion_to_dict
+from .evidence_fusion import fuse_evidence, fuse_candidate, fusion_to_dict
 from .candidate_ranking import rank_candidates, ranked_to_dict
 from .incident_package import CandidateVessel, build_incident_package, incident_to_dict
 from .spill_vessel_graph import build_spill_vessel_graph
 from .rf_corroboration import corroborate_rf
 from .drift_analysis import estimate_source_zone, drift_to_dict
+from .drift_candidate_evidence import enrich_candidates_with_drift
 
 
 def load_rgb_image(path: str | Path) -> np.ndarray:
@@ -190,6 +191,28 @@ def _load_ais_source(georef_hulls: list[dict], detection_time: datetime):
     return None, "UNAVAILABLE", gfw_error
 
 
+def _apply_drift_and_fusion(candidates: list[dict], drift: dict) -> list[dict]:
+    """Attach drift evidence and recompute the final unified evidence fusion."""
+    enriched = enrich_candidates_with_drift(candidates, drift)
+    for candidate in enriched:
+        fused = fuse_candidate(candidate)
+        candidate["evidence_fusion"] = fusion_to_dict(fused)
+        candidate["investigation_score"] = fused.score
+        candidate["investigation_classification"] = fused.classification
+        candidate["investigation_confidence"] = fused.confidence
+        candidate["investigation_evidence_coverage"] = fused.available_weight
+        candidate["responsibility_status"] = "NOT_ESTABLISHED"
+    return sorted(
+        enriched,
+        key=lambda item: (
+            item.get("investigation_score") is not None,
+            item.get("investigation_score") if item.get("investigation_score") is not None else -1.0,
+            item.get("ranking", {}).get("priority_score", 0.0),
+        ),
+        reverse=True,
+    )
+
+
 def run_real_pipeline(image_path: str | Path, center_lat: float | None = None, center_lon: float | None = None, use_ais: bool = True, environmental_observations: list[dict] | None = None, windage: float = 0.03, drift_uncertainty_km: float = 2.0) -> dict[str, Any]:
     path = Path(image_path)
     if not path.exists():
@@ -235,6 +258,10 @@ def run_real_pipeline(image_path: str | Path, center_lat: float | None = None, c
     primary_location = next((c.get("geolocation") for c in components if c.get("geolocation")), None)
     drift_result = estimate_source_zone(primary_location.get("lat") if primary_location else None, primary_location.get("lon") if primary_location else None, timestamp, environmental_observations, windage=windage, uncertainty_km=drift_uncertainty_km)
     drift = drift_to_dict(drift_result)
+    if ranked_candidates:
+        ranked_candidates = _apply_drift_and_fusion(ranked_candidates, drift)
+        ais_matches = ranked_candidates
+        vessel_graph = build_spill_vessel_graph(ranked_candidates)
     environmental = {"status": "AVAILABLE" if environmental_observations else "NOT_AVAILABLE", "observation_count": len(environmental_observations or []), "reason": drift_result.reason}
     candidate_objects = [CandidateVessel(mmsi=m["matched_mmsi"], vessel_name=m.get("matched_vessel_name"), association=m.get("association") or {}, history=m.get("vessel_history"), trajectory=m.get("trajectory"), ranking=m.get("ranking")) for m in ais_matches if m.get("matched_mmsi")]
     rf_result = corroborate_rf([], 0.0, 0.0)
