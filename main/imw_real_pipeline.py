@@ -49,10 +49,11 @@ def load_tiled_rgb(path: str | Path, tile_size: int = 8000):
         for y in range(0, src.height, tile_size):
             for x in range(0, src.width, tile_size):
                 width,height=min(tile_size,src.width-x),min(tile_size,src.height-y)
-                data=src.read()
+                window=rasterio.windows.Window(x,y,width,height)
+                data=src.read(window=window)
                 if data.shape[0]==1: data=np.repeat(data,3,axis=0)
                 elif data.shape[0]>3: data=data[:3]
-                rgb=np.moveaxis(data[:,y:y+height,x:x+width],0,-1)
+                rgb=np.moveaxis(data,0,-1)
                 yield x,y,_normalize_tile(rgb)
 
 
