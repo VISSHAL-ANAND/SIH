@@ -38,6 +38,27 @@ def _priority(score: float) -> str:
     return "LOW"
 
 
+def _gap_score(history: dict, candidate: dict) -> float | None:
+    """Convert AIS-gap evidence into modest investigation-priority evidence."""
+    gap = candidate.get("ais_gap") or candidate.get("gap_analysis") or history.get("gap_analysis")
+    if not isinstance(gap, dict):
+        status = history.get("ais_gap_status") or history.get("gap_status")
+        if status is None:
+            return None
+        gap = {"status": status}
+
+    status = str(gap.get("status") or "").upper()
+    if status == "AIS_GAP_OBSERVED":
+        return 0.65
+    if status == "GAP_REQUIRES_COVERAGE_REVIEW":
+        return 0.35
+    if status == "AIS_CONTINUITY_OBSERVED":
+        return 0.0
+    if status in {"NO_COVERAGE_TO_ASSESS", "NO_OBSERVATIONS", "INSUFFICIENT_DATA"}:
+        return None
+    return None
+
+
 def rank_candidates(candidates: list[dict]) -> list[RankedCandidate]:
     """Rank candidates without ever assigning responsibility."""
     ranked: list[RankedCandidate] = []
@@ -50,8 +71,18 @@ def rank_candidates(candidates: list[dict]) -> list[RankedCandidate]:
         temporal = max(0.0, 1.0 - float(hours) / 2.0) if hours is not None else None
         continuity = history.get("evidence_strength")
         trajectory = (c.get("trajectory") or {}).get("trajectory_score")
+        gap = _gap_score(history, c)
 
-        values = [(0.35, spatial), (0.20, temporal), (0.20, continuity), (0.25, trajectory)]
+        # AIS gaps are deliberately limited to 12% of the ranking. They can
+        # increase investigation priority but can never dominate physical,
+        # temporal, history, or trajectory evidence.
+        values = [
+            (0.30, spatial),
+            (0.18, temporal),
+            (0.18, continuity),
+            (0.22, trajectory),
+            (0.12, gap),
+        ]
         available = [(w, v) for w, v in values if v is not None]
         total_weight = sum(w for w, _ in available)
         score = sum(w * _clamp(v) for w, v in available) / total_weight if total_weight else 0.0
@@ -65,6 +96,12 @@ def rank_candidates(candidates: list[dict]) -> list[RankedCandidate]:
             reasons.append(str(history["status"]))
         if trajectory is not None:
             reasons.append(f"trajectory evidence {float(trajectory):.2f}")
+
+        gap_source = c.get("ais_gap") or c.get("gap_analysis") or history.get("gap_analysis")
+        gap_status = gap_source.get("status") if isinstance(gap_source, dict) else None
+        if gap_status:
+            reasons.append(f"AIS gap evidence: {gap_status}")
+
         if not reasons:
             reasons.append("Insufficient observed evidence")
 
@@ -80,7 +117,7 @@ def rank_candidates(candidates: list[dict]) -> list[RankedCandidate]:
             spatial_distance_km=round(float(distance), 3) if distance is not None else None,
             temporal_delta_minutes=round(float(hours) * 60.0, 2) if hours is not None else None,
             ais_coverage=c.get("coverage_status", "UNKNOWN"),
-            ais_gap=history.get("status", "NOT_ASSESSABLE"),
+            ais_gap=gap_status or history.get("status", "NOT_ASSESSABLE"),
             history_continuity=history.get("status", "NOT_ASSESSABLE"),
             association_classification=association.get("classification", "UNRESOLVED"),
             reasons=reasons,
