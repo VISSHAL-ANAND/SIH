@@ -139,7 +139,7 @@ def _run_slick_inference(path: Path, model):
     import rasterio
     with rasterio.open(path) as src: height,width=src.height,src.width
     stitched=np.zeros((height,width),dtype=np.uint8)
-    for x,y,tile in load_tiled_rgb(path,tile_size=1024):
+    for x,y,tile in load_tiled_rgb(path):
         mask=predict_mask(model,tile); h,w=mask.shape; stitched[y:y+h,x:x+w]=mask
         del mask,tile
     from .shape_classifier import classify_slick_shape,components_to_dicts
@@ -172,7 +172,7 @@ def run_real_pipeline(image_path: str | Path, center_lat=None, center_lon=None, 
                     else: all_candidates.append(_unresolved_candidate(idx,coverage,detection_time))
             ranked_dicts=ranked_to_dict(rank_candidates(all_candidates)); ranking_by_key={(r.get("hull_id"),r.get("mmsi")):r for r in ranked_dicts}; ranked_candidates=[_enrich_ranked_candidate(ranking_by_key.get((c.get("hull_id"),c.get("matched_mmsi"))),c) for c in all_candidates]; ais_matches=ranked_candidates; vessel_graph=build_spill_vessel_graph(ranked_candidates)
     primary_location=next((c.get("geolocation") for c in components if c.get("geolocation")),None)
-    drift_result=estimate_source_zone(primary_location.get("lat") if primary_location else None,primary_location.get("lon") if primary_location else None,environmental_observations,windage=windage,uncertainty_km=drift_uncertainty_km)
+    drift_result=estimate_source_zone(primary_location.get("lat") if primary_location else None,primary_location.get("lon") if primary_location else None,detection_time,environmental_observations,windage=windage,uncertainty_km=drift_uncertainty_km)
     drift=drift_to_dict(drift_result)
     if ranked_candidates: ranked_candidates=_apply_drift_and_fusion(ranked_candidates,drift); ais_matches=ranked_candidates; vessel_graph=build_spill_vessel_graph(ranked_candidates)
     # RF is intentionally empty until a real RF provider is connected; never fabricate RF observations.
