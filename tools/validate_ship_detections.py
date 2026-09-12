@@ -37,9 +37,10 @@ def create_preview(image_path: str, output_path: str, max_side: int = 1800) -> l
 
     detections = detect_hulls(image_path)
     with rasterio.open(image_path) as src:
-        scale = min(1.0, max_side / max(src.width, src.height))
-        out_w = max(1, int(round(src.width * scale)))
-        out_h = max(1, int(round(src.height * scale)))
+        src_width, src_height = src.width, src.height
+        scale = min(1.0, max_side / max(src_width, src_height))
+        out_w = max(1, int(round(src_width * scale)))
+        out_h = max(1, int(round(src_height * scale)))
         preview = src.read(
             1,
             out_shape=(out_h, out_w),
@@ -51,10 +52,12 @@ def create_preview(image_path: str, output_path: str, max_side: int = 1800) -> l
     draw = ImageDraw.Draw(image)
     font = ImageFont.load_default()
 
+    # Detection boxes are in full-scene pixel coordinates; scale them using
+    # the original raster dimensions, not the already-downsampled preview.
+    sx = image.width / max(1, src_width)
+    sy = image.height / max(1, src_height)
     for index, det in enumerate(detections, start=1):
         x1, y1, x2, y2 = det["bbox_px"]
-        sx = image.width / max(1, preview.shape[1])
-        sy = image.height / max(1, preview.shape[0])
         box = (x1 * sx, y1 * sy, x2 * sx, y2 * sy)
         draw.rectangle(box, outline=(255, 0, 0), width=2)
         label = f"#{index} {det['confidence']:.2f}"
