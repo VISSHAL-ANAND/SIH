@@ -43,7 +43,7 @@ def _normalize_tile(data: np.ndarray) -> np.ndarray:
     return out.astype(np.uint8)
 
 
-def load_tiled_rgb(path: str | Path, tile_size: int = 1536):
+def load_tiled_rgb(path: str | Path, tile_size: int = 1024):
     """Yield small Sentinel-1 RGB tiles so CPU inference stays within 16 GB RAM."""
     import rasterio
     with rasterio.open(path) as src:
@@ -139,7 +139,7 @@ def _run_slick_inference(path: Path, model):
     import rasterio
     with rasterio.open(path) as src: height,width=src.height,src.width
     stitched=np.zeros((height,width),dtype=np.uint8)
-    for x,y,tile in load_tiled_rgb(path):
+    for x,y,tile in load_tiled_rgb(path,tile_size=1024):
         mask=predict_mask(model,tile); h,w=mask.shape; stitched[y:y+h,x:x+w]=mask
         del mask,tile
     from .shape_classifier import classify_slick_shape,components_to_dicts
