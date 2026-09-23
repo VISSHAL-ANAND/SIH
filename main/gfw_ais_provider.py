@@ -24,7 +24,6 @@ import requests
 
 GFW_API_BASE = "https://gateway.api.globalfishingwatch.org/v3/4wings/report"
 GFW_DATASET = "public-global-presence:latest"
-GFW_MAX_AGE_HOURS = 96
 
 
 class GFWAPIError(RuntimeError):
@@ -80,11 +79,10 @@ class GFWAISProvider:
         detection_utc = _parse_timestamp(detection_time.isoformat())
         now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
         age_hours = (now_utc - detection_utc).total_seconds() / 3600.0
-        if age_hours > GFW_MAX_AGE_HOURS:
-            raise GFWAPIError(
-                f"GFW AIS presence is only available to approximately {GFW_MAX_AGE_HOURS} hours before now; "
-                f"requested scene is {age_hours:.1f} hours old."
-            )
+        # The public-global-presence dataset supports historical date ranges;
+        # do not reject older SAR scenes merely because the live data service
+        # also has a recent-data boundary. The API itself remains authoritative
+        # for whether the requested historical interval is currently available.
         if age_hours < -1:
             raise GFWAPIError("SAR detection timestamp is in the future relative to the GFW service clock.")
 
