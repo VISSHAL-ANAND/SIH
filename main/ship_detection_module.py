@@ -128,10 +128,34 @@ def _iou(a, b):
 
 
 def _global_nms(detections, iou_threshold: float):
+    """Suppress overlapping tiled detections, including nested duplicates.
+
+    Tiled SAR inference can produce one tight box and one larger box around
+    the same vessel. Standard IoU alone may keep both when the smaller box
+    is mostly contained by the larger one, so we also suppress high
+    intersection-over-smaller-area cases.
+    """
     ordered = sorted(detections, key=lambda d: d["confidence"], reverse=True)
     kept = []
     for det in ordered:
-        if all(_iou(det["bbox_px"], prev["bbox_px"]) < iou_threshold for prev in kept): kept.append(det)
+        duplicate = False
+        for prev in kept:
+            a = det["bbox_px"]
+            b = prev["bbox_px"]
+            if _iou(a, b) >= iou_threshold:
+                duplicate = True
+                break
+            ax1, ay1, ax2, ay2 = a
+            bx1, by1, bx2, by2 = b
+            inter = max(0.0, min(ax2, bx2) - max(ax1, bx1)) * max(0.0, min(ay2, by2) - max(ay1, by1))
+            area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+            area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+            smaller = min(area_a, area_b)
+            if smaller > 0 and inter / smaller >= 0.80:
+                duplicate = True
+                break
+        if not duplicate:
+            kept.append(det)
     return kept
 
 
