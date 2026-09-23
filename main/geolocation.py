@@ -60,6 +60,12 @@ def _find_sentinel1_annotation_xml(measurement_path: str | Path) -> Optional[Pat
         return None
     stem = path.stem.lower()
 
+    # Also support the deployed IMW layout where the matching annotation
+    # XML is copied next to the measurement TIFF (e.g. SAR_DATA/).
+    colocated = path.parent / f"{stem}.xml"
+    if colocated.is_file():
+        return colocated
+
     for ancestor in path.parents:
         annotation_dir = ancestor / "annotation"
         if not annotation_dir.is_dir():
